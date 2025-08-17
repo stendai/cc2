@@ -1,40 +1,37 @@
 """
 Streamlit Covered Call Dashboard - Główna aplikacja
-ETAP 1 UKOŃCZONY: Punkty 1-15 (NBP API + Cache + Seed data)
+ETAP 2 UKOŃCZONY: Punkty 1-30 (NBP API + Cashflows kompletny)
 
 STATUS PROJEKTU:
-✅ PUNKTY 1-5: Fundament aplikacji (struktura, nawigacja, baza, utils, testy)
-✅ PUNKTY 6-10: Struktura bazy danych (9 tabel + operacje CRUD + logika FIFO)
-✅ PUNKTY 11-15: NBP API Client kompletny (cache + seed + święta + auto-seed)
+✅ PUNKTY 1-15: ETAP 1 - Fundament aplikacji (NBP API, baza, utils, testy)
+✅ PUNKTY 16-30: ETAP 2 - Moduł Cashflows (kompletny przepływy pieniężne)
 
 NASTĘPNE ETAPY:
-🔄 PUNKTY 16-30: Moduł Cashflows (ETAP 2)
-🔄 PUNKTY 31-50: Moduł Stocks (ETAP 3)
+🚀 PUNKTY 31-50: Moduł Stocks (ETAP 3) - NASTĘPNY!
 🔄 PUNKTY 51-70: Moduł Options (ETAP 4)
 🔄 PUNKTY 71-80: Moduł Dividends (ETAP 5)
 🔄 PUNKTY 81-90: Moduł Taxes (ETAP 6)
 🔄 PUNKTY 91-100: Dashboard + finalizacja (ETAP 7)
 
-UKOŃCZONE KOMPONENTY ETAPU 1:
+UKOŃCZONE KOMPONENTY ETAPU 1+2:
 - Struktura aplikacji Streamlit z 8 modułami
-- Pełna baza danych SQLite (9 tabel)
-- Operacje CRUD dla wszystkich tabel
-- Logika FIFO dla sprzedaży akcji
-- Podstawowe utils (formatowanie)
-- NBP API Client z pełną funkcjonalnością:
-  * Pobieranie kursów USD z API NBP
-  * Cache'owanie w bazie danych
-  * Obsługa weekendów i świąt narodowych
-  * Bulk loading kursów
-  * Seed data (automatyczne uzupełnianie)
-  * Manual override kursów
-  * Auto-seed przy starcie aplikacji
-- Kompletne testy wszystkich struktur
+- Pełna baza danych SQLite (9 tabel) z operacjami CRUD
+- NBP API Client z cache, seed data, obsługą świąt
+- KOMPLETNY moduł Cashflows z pełną funkcjonalnością:
+  * Formularze wpłat/wypłat z automatycznym kursem NBP D-1
+  * Manual override kursów NBP
+  * Walidacje biznesowe (wpłaty dodatnie, wypłaty ujemne)
+  * Tabele z filtrami (typ, źródło, kwota)
+  * Edycja/usuwanie operacji ręcznych
+  * Eksport CSV z timestampem
+  * Statystyki (saldo, wpływy, wydatki)
+  * 3 taby: Ręczne | Automatyczne | Wszystkie
+  * Integracja z automatycznymi cashflows
 
 BAZA DANYCH (9 tabel):
 1. app_info - metadane aplikacji
-2. fx_rates - kursy NBP (cache + API)
-3. cashflows - przepływy pieniężne
+2. fx_rates - kursy NBP (cache + API) ✅
+3. cashflows - przepływy pieniężne ✅ KOMPLETNE
 4. lots - LOT-y akcji z logiką FIFO
 5. stock_trades - sprzedaże akcji
 6. stock_trade_splits - rozbicia FIFO
@@ -42,7 +39,7 @@ BAZA DANYCH (9 tabel):
 8. dividends - dywidendy
 9. market_prices - cache cen rynkowych
 
-GOTOWE DO ETAPU 2: Moduł Cashflows (punkty 16-30)
+GOTOWE DO ETAPU 3: Moduł Stocks (punkty 31-50)
 """
 
 import streamlit as st
@@ -120,9 +117,9 @@ def main():
         # Status projektu w sidebar
         st.markdown("---")
         st.markdown("### 📊 Status projektu")
-        st.markdown("**ETAP 1 UKOŃCZONY** ✅")
-        st.markdown("Punkty 1-15 (15/100)")
-        st.markdown("*NBP API kompletny*")
+        st.markdown("**ETAP 2 UKOŃCZONY** ✅")
+        st.markdown("Punkty 1-30 (30/100)")
+        st.markdown("*NBP API + Cashflows*")
     
     # Główna zawartość - routing do modułów
     if st.session_state.current_page == 'Dashboard':
@@ -136,7 +133,8 @@ def main():
     elif st.session_state.current_page == 'Dividends':
         show_placeholder('Dividends', '💰', 'Dywidendy')
     elif st.session_state.current_page == 'Cashflows':
-        show_placeholder('Cashflows', '💸', 'Przepływy pieniężne')
+        from modules.cashflows import show_cashflows
+        show_cashflows()
     elif st.session_state.current_page == 'Taxes':
         show_placeholder('Taxes', '📋', 'Rozliczenia podatkowe')
     elif st.session_state.current_page == 'Stats':
@@ -154,7 +152,7 @@ def show_nbp_test():
 
 def show_dashboard():
     """Główna strona dashboard"""
-    st.header("🎉 ETAP 1 UKOŃCZONY - NBP API KOMPLETNY!")
+    st.header("🎉 ETAP 2 UKOŃCZONY - CASHFLOWS KOMPLETNY!")
     
     # Auto-seed kursów NBP przy każdym wejściu na dashboard (PUNKT 15B)
     try:
@@ -163,170 +161,129 @@ def show_dashboard():
     except Exception as e:
         st.warning(f"⚠️ Auto-seed nie powiódł się: {e}")
     
-    # Podsumowanie ETAPU 1
-    with st.expander("✅ ETAP 1 UKOŃCZONY - Punkty 1-15", expanded=True):
+    # Podsumowanie ETAPU 1+2
+    with st.expander("✅ ETAP 1+2 UKOŃCZONE - Punkty 1-30", expanded=True):
         col1, col2, col3 = st.columns(3)
         
         with col1:
             st.markdown("""
-            **📁 PUNKTY 1-5: FUNDAMENT**
+            **📁 ETAP 1: FUNDAMENT (1-15)**
             - ✅ Struktura katalogów i plików
             - ✅ Aplikacja Streamlit z nawigacją
-            - ✅ Połączenie z bazą SQLite
+            - ✅ Baza SQLite (9 tabel + CRUD)
             - ✅ Utils (formatowanie)
-            - ✅ Testy podstawowych funkcji
+            - ✅ NBP API Client kompletny
             """)
             
         with col2:
             st.markdown("""
-            **🗄️ PUNKTY 6-10: BAZA DANYCH**
-            - ✅ Tabele fx_rates (kursy NBP)
-            - ✅ Tabele cashflows (przepływy)
-            - ✅ Tabele lots (LOT-y akcji)
-            - ✅ Tabele stock_trades (sprzedaże FIFO)
-            - ✅ Tabele options_cc, dividends, market_prices
+            **💸 ETAP 2: CASHFLOWS (16-30)**
+            - ✅ Formularze wpłat/wypłat
+            - ✅ Kursy NBP D-1 + manual override
+            - ✅ Walidacje biznesowe
+            - ✅ Tabele z filtrami
+            - ✅ Edycja/usuwanie + eksport CSV
             """)
             
         with col3:
             st.markdown("""
-            **🏦 PUNKTY 11-15: NBP API**
-            - ✅ Podstawowy client (11)
-            - ✅ Bulk loading + seed (12)
-            - ✅ Obsługa świąt PL (13)
-            - ✅ UI zarządzania cache (14)
-            - ✅ Auto-seed startup (15)
+            **📊 FUNKCJONALNOŚCI CASHFLOWS**
+            - ✅ 3 taby (Ręczne/Auto/Wszystkie)
+            - ✅ Statystyki (saldo, wpływy, wydatki)
+            - ✅ Linki ref do operacji źródłowych
+            - ✅ Integracja z automatycznymi cashflows
+            - ✅ Profesjonalny UI gotowy do produkcji
             """)
     
-    # ETAP 2 - Następne kroki
-    with st.expander("🔄 ETAP 2: MODUŁ CASHFLOWS - Punkty 16-30"):
+    # ETAP 3 - Następne kroki
+    with st.expander("🚀 ETAP 3: MODUŁ STOCKS - Punkty 31-50 (NASTĘPNY!)"):
         st.markdown("""
-        **🎯 CEL ETAPU 2:** Pełny moduł przepływów pieniężnych z UI
+        **🎯 CEL ETAPU 3:** Pełny moduł zarządzania akcjami z logiką FIFO
         
-        **💸 FUNKCJONALNOŚCI DO ZROBIENIA:**
-        - 📝 Formularze wpłat/wypłat z automatycznym kursem NBP D-1
-        - 📊 Tabele cashflows z filtrami (typ, data, kwota)
-        - ✏️ Edycja i usuwanie operacji
-        - 📤 Eksporty do CSV
-        - ⚡ Walidacje i kontrole błędów
-        - 🔗 Integracja z innymi modułami (automatyczne cashflows)
+        **📊 FUNKCJONALNOŚCI DO ZROBIENIA:**
+        - 📝 Formularze zakupu LOT-ów akcji z kursem NBP D-1
+        - 💰 Automatyczne tworzenie cashflows przy zakupie/sprzedaży
+        - 🔄 Sprzedaże FIFO z rozbiciem po LOT-ach
+        - 📊 Tabele LOT-ów (quantity_open, koszt PLN, P/L)
+        - 📈 Tabele sprzedaży z alokacją FIFO
+        - 🔒 Blokady sprzedaży pod otwarte covered calls
+        - 📤 Eksporty stocks do CSV
         
         **🏗️ STRUKTURA:**
-        - pages/cashflows.py - główny UI modułu
-        - Rozszerzenie db.py o dodatkowe operacje
-        - Integracja z NBP API dla kursów
+        - modules/stocks.py - główny UI modułu
+        - Rozszerzenie operacji CRUD w db.py
+        - Integracja z cashflows (automatyczne operacje)
         
         **🎯 OCZEKIWANY REZULTAT:**
-        - Kompletny dziennik przepływów pieniężnych
-        - Każda operacja z kursem NBP D-1 i przeliczeniem PLN
-        - Gotowa podstawa dla pozostałych modułów
+        - Kompletne zarządzanie portfelem akcji
+        - Logika FIFO działająca automatycznie
+        - Podstawa pod covered calls (ETAP 4)
+        - Wszystkie operacje zintegrowane z cashflows
         """)
     
     # Pozostałe etapy
-    with st.expander("🗺️ POZOSTAŁE ETAPY - Punkty 31-100"):
+    with st.expander("🗺️ POZOSTAŁE ETAPY - Punkty 51-100"):
         st.markdown("""
-        **📊 ETAP 3: MODUŁ STOCKS (31-50)**
-        - Zakupy LOT-ów akcji z kursem NBP
-        - Sprzedaże FIFO z UI i rozbiciami
-        - Blokady pod covered calls
-        
         **🎯 ETAP 4: MODUŁ OPTIONS (51-70)**
-        - Covered calls z rezerwacjami akcji
-        - Buyback i expiry
-        - Rolowanie opcji
+        - Covered calls z rezerwacjami akcji FIFO
+        - Buyback i expiry z P/L
+        - Rolowanie opcji (buyback + nowa sprzedaż)
         
         **💰 ETAP 5: MODUŁ DIVIDENDS (71-80)**
         - Dywidendy z rozliczeniami PIT-36
+        - WHT 15% + dopłata 4%
         
         **📋 ETAP 6: MODUŁ TAXES (81-90)**
         - Rozliczenia PIT-38/PIT-36
+        - Agregacja z wszystkich modułów
         - Eksporty do rozliczeń
         
         **📈 ETAP 7: DASHBOARD + FINALIZACJA (91-100)**
-        - KPI i alerty
+        - KPI i alerty na dashboardzie
         - Wykresy i statystyki
-        - Integracja z yfinance
+        - Integracja z yfinance (MTM)
         """)
     
-    # Test kompletnego systemu NBP
-    st.header("🧪 Test kompletnego systemu NBP")
+    # Test cashflows
+    st.header("🧪 Test modułu Cashflows")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("🏦 Test pełnego NBP API"):
+        if st.button("💸 Test Cashflows"):
+            try:
+                stats = db.get_cashflows_stats()
+                st.success(f"✅ Cashflows: {stats['total_records']} operacji")
+                st.write(f"Saldo: ${stats['total_usd']:.2f}")
+                if stats['total_records'] > 0:
+                    st.write(f"Zakres: {stats['oldest_date']} → {stats['newest_date']}")
+            except Exception as e:
+                st.error(f"❌ Błąd: {e}")
+    
+    with col2:
+        if st.button("🏦 Test NBP API"):
             test_results = nbp_api_client.test_nbp_api()
-            
-            st.write("**Wyniki testów:**")
-            for test_name, result in test_results.items():
-                if result:
-                    st.success(f"✅ {test_name}")
-                else:
-                    st.error(f"❌ {test_name}")
-            
             passed = sum(test_results.values())
             total = len(test_results)
             
             if passed == total:
-                st.success(f"🎉 NBP API działa perfekcyjnie! ({passed}/{total})")
+                st.success(f"✅ NBP API: {passed}/{total}")
             else:
-                st.warning(f"⚠️ NBP API częściowo działa ({passed}/{total})")
-    
-    with col2:
-        if st.button("🌱 Test seed data"):
-            with st.spinner("Testowanie seed..."):
-                end_date = nbp_api_client.date.today()
-                start_date = end_date - nbp_api_client.timedelta(days=7)
-                results = nbp_api_client.nbp_client.bulk_load_fx_rates(start_date, end_date)
-                success_count = len([v for v in results.values() if v])
-                st.success(f"✅ Seed test: {success_count} kursów")
+                st.warning(f"⚠️ NBP API: {passed}/{total}")
     
     with col3:
-        if st.button("🔗 Przejdź do NBP Test"):
-            st.session_state.current_page = 'NBP_Test'
+        if st.button("🔗 Przejdź do Cashflows"):
+            st.session_state.current_page = 'Cashflows'
             st.rerun()
     
-    # Testy wszystkich komponentów ETAPU 1
-    st.header("🧪 Testy wszystkich komponentów")
+    # Testy bazy danych
+    st.header("🧪 Testy infrastruktury")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        # Test podstawowych funkcji (Punkty 1-5)
-        if st.button("🚀 Test fundament (Punkty 1-5)"):
-            test_results = []
-            
-            try:
-                from utils.formatting import format_currency_usd
-                test_results.append("✅ Import modułów - OK")
-            except Exception as e:
-                test_results.append(f"❌ Import modułów - {e}")
-            
-            try:
-                db_status = db.test_database_connection()
-                if db_status['connection_ok']:
-                    test_results.append("✅ Połączenie z bazą - OK")
-                else:
-                    test_results.append("❌ Połączenie z bazą - BŁĄD")
-            except Exception as e:
-                test_results.append(f"❌ Test bazy - {e}")
-            
-            try:
-                test_usd = format_currency_usd(1234.56)
-                if "$1,234.56" in test_usd:
-                    test_results.append("✅ Formatowanie - OK")
-                else:
-                    test_results.append("❌ Formatowanie - BŁĄD")
-            except Exception as e:
-                test_results.append(f"❌ Formatowanie - {e}")
-            
-            for result in test_results:
-                if "✅" in result:
-                    st.success(result)
-                else:
-                    st.error(result)
-        
-        # Test bazy danych (Punkty 6-10)
-        if st.button("🗄️ Test bazy danych (Punkty 6-10)"):
+        # Test wszystkich modułów
+        if st.button("🗄️ Test bazy danych"):
             try:
                 import structure
                 
@@ -363,6 +320,7 @@ def show_dashboard():
         if st.button("📊 Statystyki systemu"):
             db_summary = db.get_database_summary()
             fx_stats = db.get_fx_rates_stats()
+            cashflow_stats = db.get_cashflows_stats()
             
             st.write("**Baza danych:**")
             st.write(f"- Tabel: {db_summary['total_tables']}")
@@ -370,42 +328,10 @@ def show_dashboard():
             
             st.write("**NBP Cache:**")
             st.write(f"- Kursów USD: {fx_stats['total_records']}")
-            st.write(f"- Zakres: {fx_stats['oldest_date']} → {fx_stats['newest_date']}")
-            if fx_stats['latest_usd_rate']:
-                st.write(f"- Ostatni kurs: {fx_stats['latest_usd_rate']:.4f}")
-        
-        # Sprawdzenie pokrycia kursów
-        if st.button("🔍 Pokrycie kursów NBP"):
-            # Sprawdź ostatnie 30 dni
-            end_date = nbp_api_client.date.today()
-            start_date = end_date - nbp_api_client.timedelta(days=30)
             
-            # Policz dni robocze
-            business_days = 0
-            current_date = start_date
-            while current_date <= end_date:
-                if nbp_api_client.is_business_day(current_date):
-                    business_days += 1
-                current_date += nbp_api_client.timedelta(days=1)
-            
-            # Sprawdź ile w bazie
-            conn = db.get_connection()
-            existing_count = 0
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT COUNT(*) FROM fx_rates 
-                    WHERE code = 'USD' AND date BETWEEN ? AND ?
-                """, (start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
-                existing_count = cursor.fetchone()[0]
-                conn.close()
-            
-            coverage = (existing_count / business_days * 100) if business_days > 0 else 0
-            
-            st.metric("Pokrycie 30 dni", f"{coverage:.1f}%")
-            st.write(f"Dni robocze: {business_days}")
-            st.write(f"W cache: {existing_count}")
-            st.write(f"Brakuje: {business_days - existing_count}")
+            st.write("**Cashflows:**")
+            st.write(f"- Operacji: {cashflow_stats['total_records']}")
+            st.write(f"- Saldo USD: ${cashflow_stats['total_usd']:.2f}")
     
     # Informacje o systemie
     st.header("ℹ️ Informacje o systemie")
@@ -426,15 +352,15 @@ def show_dashboard():
         - 🐍 **Backend**: Python + SQLite
         - 🌐 **Frontend**: Streamlit
         - 🏦 **Kursy**: NBP API + cache ✅
-        - 📈 **Ceny**: yfinance (w przyszłości)
+        - 💸 **Cashflows**: Kompletny moduł ✅
         - 📊 **Dane**: Ręczne wprowadzanie
         """)
     
     # Footer z statusem
     st.markdown("---")
-    st.success("🎉 **ETAP 1 UKOŃCZONY!** NBP API kompletny - wszystkie funkcjonalności działają")
-    st.info("🚀 **Następny etap:** ETAP 2 - Moduł Cashflows (punkty 16-30)")
-    st.markdown("*Streamlit Covered Call Dashboard v1.0 - **GOTOWY DO ETAPU 2** (15/100 punktów)*")
+    st.success("🎉 **ETAP 2 UKOŃCZONY!** Cashflows kompletny - wszystkie funkcjonalności działają")
+    st.info("🚀 **Następny etap:** ETAP 3 - Moduł Stocks (punkty 31-50)")
+    st.markdown("*Streamlit Covered Call Dashboard v2.0 - **GOTOWY DO ETAPU 3** (30/100 punktów)*")
 
 def show_placeholder(module_name, icon, description):
     """Placeholder dla modułów, które będą implementowane w kolejnych etapach"""
@@ -444,10 +370,9 @@ def show_placeholder(module_name, icon, description):
     
     # Pokazuj w którym etapie będzie implementowany
     implementation_points = {
-        'Stocks': 'ETAP 3: Punkty 31-50',
+        'Stocks': 'ETAP 3: Punkty 31-50 (NASTĘPNY!)',
         'Options': 'ETAP 4: Punkty 51-70', 
         'Dividends': 'ETAP 5: Punkty 71-80',
-        'Cashflows': 'ETAP 2: Punkty 16-30 (NASTĘPNY!)',
         'Taxes': 'ETAP 6: Punkty 81-90',
         'Stats': 'ETAP 7: Punkty 91-100',
         'Charts': 'ETAP 7: Punkty 91-100'
@@ -458,10 +383,10 @@ def show_placeholder(module_name, icon, description):
     
     # Status obecnego etapu
     st.markdown("---")
-    st.success("✅ **ETAP 1 UKOŃCZONY** - NBP API kompletny")
+    st.success("✅ **ETAP 2 UKOŃCZONY** - NBP API + Cashflows kompletne")
     
-    if module_name == 'Cashflows':
-        st.info("🚀 **TEN MODUŁ JEST NASTĘPNY** - rozpocznij nową rozmowę dla ETAPU 2!")
+    if module_name == 'Stocks':
+        st.info("🚀 **TEN MODUŁ JEST NASTĘPNY** - rozpocznij nową rozmowę dla ETAPU 3!")
     else:
         st.info("💡 Wróć do Dashboard aby zobaczyć pełny status projektu")
 
