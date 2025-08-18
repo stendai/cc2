@@ -139,7 +139,11 @@ def main():
                 st.error("❌ Nie można zaimportować modułu stocks")
                 st.info("💡 Upewnij się, że plik stocks.py istnieje w katalogu modules/ lub głównym")
     elif st.session_state.current_page == 'Options':
-        show_placeholder('Options', '🎯', 'Covered calls - ETAP 4')
+        try:
+            from modules.options import show_options
+            show_options()
+        except ImportError:
+            st.error("❌ Nie można zaimportować modułu options")
     elif st.session_state.current_page == 'Dividends':
         show_placeholder('Dividends', '💰', 'Dywidendy - ETAP 5')
     elif st.session_state.current_page == 'Cashflows':

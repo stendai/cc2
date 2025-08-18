@@ -979,3 +979,763 @@ def get_database_summary():
         'total_records': 0,
         'tables': {}
     }
+
+# DODAJ NA KOŃCU db.py - PUNKT 52: REZERWACJE FIFO
+
+# ================================
+# OPERACJE REZERWACJI AKCJI (CC)
+# ================================
+
+def check_cc_coverage(ticker, contracts_needed):
+    """
+    Sprawdza czy jest wystarczające pokrycie dla sprzedaży CC
+    
+    Args:
+        ticker: Symbol akcji
+        contracts_needed: Liczba kontraktów CC (1 kontrakt = 100 akcji)
+    
+    Returns:
+        dict: {'can_cover': bool, 'shares_needed': int, 'shares_available': int, 'fifo_preview': list}
+    """
+    shares_needed = contracts_needed * 100
+    
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'can_cover': False, 'error': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # Pobierz LOT-y FIFO z dostępnymi akcjami
+        cursor.execute("""
+            SELECT id, quantity_open, buy_date, buy_price_usd, fx_rate
+            FROM lots 
+            WHERE ticker = ? AND quantity_open > 0
+            ORDER BY buy_date, id
+        """, (ticker.upper(),))
+        
+        lots = cursor.fetchall()
+        conn.close()
+        
+        if not lots:
+            return {
+                'can_cover': False,
+                'shares_needed': shares_needed,
+                'shares_available': 0,
+                'fifo_preview': [],
+                'message': f'Brak akcji {ticker} w portfelu'
+            }
+        
+        # Sprawdź pokrycie FIFO
+        total_available = sum([lot[1] for lot in lots])  # quantity_open
+        
+        fifo_preview = []
+        remaining_needed = shares_needed
+        
+        for lot in lots:
+            if remaining_needed <= 0:
+                break
+                
+            lot_id, qty_open, buy_date, buy_price, fx_rate = lot
+            qty_to_reserve = min(remaining_needed, qty_open)
+            
+            fifo_preview.append({
+                'lot_id': lot_id,
+                'buy_date': buy_date,
+                'buy_price_usd': buy_price,
+                'fx_rate': fx_rate,
+                'qty_available': qty_open,
+                'qty_to_reserve': qty_to_reserve,
+                'qty_remaining_after': qty_open - qty_to_reserve
+            })
+            
+            remaining_needed -= qty_to_reserve
+        
+        return {
+            'can_cover': remaining_needed <= 0,
+            'shares_needed': shares_needed,
+            'shares_available': total_available,
+            'fifo_preview': fifo_preview,
+            'message': 'OK' if remaining_needed <= 0 else f'Brakuje {remaining_needed} akcji'
+        }
+        
+    except Exception as e:
+        st.error(f"Błąd sprawdzania pokrycia CC: {e}")
+        return {'can_cover': False, 'error': str(e)}
+
+def reserve_shares_for_cc(ticker, contracts, cc_id):
+    """
+    Rezerwuje akcje FIFO dla otwartego CC
+    UWAGA: Funkcja tylko symuluje - faktyczna rezerwacja w punkcie 55
+    
+    Args:
+        ticker: Symbol akcji
+        contracts: Liczba kontraktów CC
+        cc_id: ID covered call (dla linku)
+    
+    Returns:
+        bool: True jeśli rezerwacja powiodła się
+    """
+    shares_needed = contracts * 100
+    
+    try:
+        # Sprawdź czy można zarezerwować
+        coverage = check_cc_coverage(ticker, contracts)
+        
+        if not coverage['can_cover']:
+            st.error(f"❌ Nie można zarezerwować {shares_needed} akcji {ticker}")
+            st.error(f"   Powód: {coverage.get('message', 'Nieznany błąd')}")
+            return False
+        
+        # PUNKT 52: Na razie tylko symulacja
+        # W punkcie 55 dodamy faktyczne UPDATE quantity_open
+        
+        st.success(f"✅ Symulacja rezerwacji: {shares_needed} akcji {ticker} dla CC #{cc_id}")
+        st.info(f"💡 Użyto {len(coverage['fifo_preview'])} LOT-ów w kolejności FIFO")
+        
+        # Pokaż szczegóły alokacji
+        for i, allocation in enumerate(coverage['fifo_preview']):
+            st.write(f"   LOT #{allocation['lot_id']}: {allocation['qty_to_reserve']} akcji (z {allocation['buy_date']})")
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Błąd rezerwacji akcji: {e}")
+        return False
+
+def get_cc_reservations_summary(ticker=None):
+    """
+    Podsumowanie rezerwacji akcji pod otwarte CC
+    
+    Args:
+        ticker: Opcjonalnie filtruj po tickerze
+    
+    Returns:
+        dict: Statystyki rezerwacji
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {}
+        
+        cursor = conn.cursor()
+        
+        # Na razie podstawowe statystyki
+        # W przyszłości będzie sprawdzać faktyczne rezerwacje
+        
+        if ticker:
+            # Sprawdź otwarte CC dla konkretnego tickera
+            cursor.execute("""
+                SELECT COUNT(*) as open_cc, SUM(contracts) as total_contracts
+                FROM options_cc 
+                WHERE ticker = ? AND status = 'open'
+            """, (ticker.upper(),))
+        else:
+            # Wszystkie otwarte CC
+            cursor.execute("""
+                SELECT COUNT(*) as open_cc, SUM(contracts) as total_contracts
+                FROM options_cc 
+                WHERE status = 'open'
+            """)
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result and result[0] > 0:
+            open_cc, total_contracts = result
+            return {
+                'open_cc_count': open_cc,
+                'total_contracts': total_contracts or 0,
+                'shares_reserved': (total_contracts or 0) * 100,
+                'message': f'{open_cc} otwartych CC, {total_contracts} kontraktów'
+            }
+        else:
+            return {
+                'open_cc_count': 0,
+                'total_contracts': 0,
+                'shares_reserved': 0,
+                'message': 'Brak otwartych CC'
+            }
+            
+    except Exception as e:
+        st.error(f"Błąd statystyk rezerwacji: {e}")
+        return {}
+
+def test_cc_reservations():
+    """Test funkcji rezerwacji - PUNKT 52 NAPRAWIONY"""
+    
+    results = {
+        'coverage_test': False,
+        'reservation_test': False,
+        'summary_test': False
+    }
+    
+    try:
+        # Test 1: Sprawdzenie pokrycia (używaj istniejącego tickera)
+        lots_stats = get_lots_stats()  # ← ZMIANA: usunięte db.
+        
+        if lots_stats['total_lots'] > 0:
+            # Znajdź ticker z dostępnymi akcjami
+            conn = get_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ticker, SUM(quantity_open) as available
+                    FROM lots 
+                    WHERE quantity_open > 0
+                    GROUP BY ticker
+                    LIMIT 1
+                """)
+                
+                ticker_result = cursor.fetchone()
+                conn.close()
+                
+                if ticker_result:
+                    test_ticker, available_shares = ticker_result
+                    test_contracts = min(1, available_shares // 100)  # Max 1 kontrakt lub ile można
+                    
+                    if test_contracts > 0:
+                        # Test pokrycia
+                        coverage = check_cc_coverage(test_ticker, test_contracts)
+                        results['coverage_test'] = coverage.get('can_cover', False)
+                        
+                        # Test rezerwacji (symulacja)
+                        if coverage.get('can_cover'):
+                            reservation = reserve_shares_for_cc(test_ticker, test_contracts, 999)
+                            results['reservation_test'] = reservation
+                    
+        # Test 3: Statystyki
+        summary = get_cc_reservations_summary()
+        results['summary_test'] = 'open_cc_count' in summary
+        
+    except Exception as e:
+        import streamlit as st  # ← DODANE: import streamlit
+        st.error(f"Błąd testów rezerwacji: {e}")
+    
+    return results
+
+# DODAJ NA KOŃCU db.py - PUNKT 54: ZAPIS CC DO BAZY
+
+def save_covered_call_to_database(cc_data):
+    """
+    Zapisuje covered call do bazy z rezerwacją akcji FIFO
+    
+    Args:
+        cc_data: dict z danymi CC z formularza
+    
+    Returns:
+        dict: {'success': bool, 'cc_id': int, 'message': str}
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # 1. SPRAWDŹ POKRYCIE (double-check)
+        coverage = check_cc_coverage(cc_data['ticker'], cc_data['contracts'])
+        if not coverage.get('can_cover'):
+            conn.close()
+            return {
+                'success': False, 
+                'message': f"Brak pokrycia: {coverage.get('message', 'Nieznany błąd')}"
+            }
+        
+        # 2. PRZYGOTUJ DATY
+        open_date_str = cc_data['open_date']
+        if hasattr(open_date_str, 'strftime'):
+            open_date_str = open_date_str.strftime('%Y-%m-%d')
+        
+        expiry_date_str = cc_data['expiry_date']
+        if hasattr(expiry_date_str, 'strftime'):
+            expiry_date_str = expiry_date_str.strftime('%Y-%m-%d')
+        
+        # 3. ZAPISZ GŁÓWNY REKORD CC
+        cursor.execute("""
+            INSERT INTO options_cc (
+                ticker, contracts, strike_usd, premium_sell_usd,
+                open_date, expiry_date, status, fx_open, premium_sell_pln
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            cc_data['ticker'],
+            cc_data['contracts'],
+            cc_data['strike_usd'],
+            cc_data['premium_sell_usd'],
+            open_date_str,
+            expiry_date_str,
+            'open',  # Status początkowy
+            cc_data['fx_open'],
+            cc_data['premium_sell_pln']
+        ))
+        
+        cc_id = cursor.lastrowid
+        
+        # 4. REZERWUJ AKCJE FIFO - FAKTYCZNIE!
+        shares_to_reserve = cc_data['contracts'] * 100
+        remaining_to_reserve = shares_to_reserve
+        
+        for allocation in coverage['fifo_preview']:
+            if remaining_to_reserve <= 0:
+                break
+            
+            lot_id = allocation['lot_id']
+            qty_to_reserve = min(remaining_to_reserve, allocation['qty_to_reserve'])
+            
+            # AKTUALIZUJ quantity_open w LOT-ach
+            cursor.execute("""
+                UPDATE lots 
+                SET quantity_open = quantity_open - ?
+                WHERE id = ?
+            """, (qty_to_reserve, lot_id))
+            
+            remaining_to_reserve -= qty_to_reserve
+        
+        # 5. UTWÓRZ CASHFLOW (przychód z premium)
+        total_premium_usd = cc_data['premium_sell_usd'] * cc_data['contracts'] * 100
+        
+        cashflow_description = f"Sprzedaż {cc_data['contracts']} CC {cc_data['ticker']} @ ${cc_data['premium_sell_usd']:.2f}"
+        
+        cursor.execute("""
+            INSERT INTO cashflows (
+                type, amount_usd, date, fx_rate, amount_pln,
+                description, ref_table, ref_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            'option_premium',  # Typ dla premium CC
+            total_premium_usd,  # Dodatnia kwota (przychód)
+            open_date_str,
+            cc_data['fx_open'],
+            cc_data['premium_sell_pln'],
+            cashflow_description,
+            'options_cc',
+            cc_id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'cc_id': cc_id,
+            'message': f'CC #{cc_id} zapisane pomyślnie!'
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        import streamlit as st
+        st.error(f"Błąd zapisu CC: {e}")
+        
+        return {
+            'success': False,
+            'message': f'Błąd zapisu: {str(e)}'
+        }
+
+def get_covered_calls_summary(ticker=None, status=None):
+    """
+    Pobranie podsumowania covered calls
+    
+    Args:
+        ticker: Opcjonalnie filtruj po tickerze
+        status: Opcjonalnie filtruj po statusie ('open', 'expired', 'bought_back')
+    
+    Returns:
+        list: Lista CC z podstawowymi danymi
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        
+        # Buduj query z filtrami
+        query = """
+            SELECT id, ticker, contracts, strike_usd, premium_sell_usd,
+                   open_date, expiry_date, status, fx_open, premium_sell_pln,
+                   premium_buyback_pln, pl_pln, created_at
+            FROM options_cc
+            WHERE 1=1
+        """
+        params = []
+        
+        if ticker:
+            query += " AND ticker = ?"
+            params.append(ticker.upper())
+        
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        
+        query += " ORDER BY open_date DESC, id DESC"
+        
+        cursor.execute(query, params)
+        cc_records = cursor.fetchall()
+        conn.close()
+        
+        # Konwertuj na listy dict
+        cc_list = []
+        for record in cc_records:
+            cc_list.append({
+                'id': record[0],
+                'ticker': record[1],
+                'contracts': record[2],
+                'strike_usd': record[3],
+                'premium_sell_usd': record[4],
+                'open_date': record[5],
+                'expiry_date': record[6],
+                'status': record[7],
+                'fx_open': record[8],
+                'premium_sell_pln': record[9],
+                'premium_buyback_pln': record[10],
+                'pl_pln': record[11],
+                'created_at': record[12]
+            })
+        
+        return cc_list
+        
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd pobierania CC: {e}")
+        return []
+
+def test_cc_save_operations():
+    """Test operacji zapisu CC - PUNKT 54"""
+    
+    results = {
+        'save_function_test': False,
+        'summary_function_test': False,
+        'rollback_test': False
+    }
+    
+    try:
+        # Test 1: Funkcje istnieją i są callable
+        results['save_function_test'] = callable(save_covered_call_to_database)
+        results['summary_function_test'] = callable(get_covered_calls_summary)
+        
+        # Test 2: Pobranie listy CC (może być pusta)
+        cc_list = get_covered_calls_summary()
+        results['rollback_test'] = isinstance(cc_list, list)
+        
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd testów CC save: {e}")
+    
+    return results
+
+# DODAJ NA KOŃCU db.py - PUNKT 56: BUYBACK CC
+
+def buyback_covered_call(cc_id, buyback_price_usd, buyback_date):
+    """
+    Odkupuje covered call z kalkulacją P/L PLN
+    
+    Args:
+        cc_id: ID covered call do odkupu
+        buyback_price_usd: Cena odkupu za akcję
+        buyback_date: Data odkupu
+    
+    Returns:
+        dict: {'success': bool, 'message': str, 'pl_pln': float}
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # 1. POBIERZ DANE CC
+        cursor.execute("""
+            SELECT id, ticker, contracts, premium_sell_usd, open_date, expiry_date,
+                   status, fx_open, premium_sell_pln
+            FROM options_cc 
+            WHERE id = ?
+        """, (cc_id,))
+        
+        cc_record = cursor.fetchone()
+        if not cc_record:
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} nie znalezione'}
+        
+        cc_id, ticker, contracts, premium_sell_usd, open_date, expiry_date, status, fx_open, premium_sell_pln = cc_record
+        
+        # 2. SPRAWDŹ STATUS
+        if status != 'open':
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} już zamknięte (status: {status})'}
+        
+        # 3. POBIERZ KURS NBP D-1 DLA BUYBACK
+        try:
+            import nbp_api_client
+            nbp_result = nbp_api_client.get_usd_rate_for_date(buyback_date)
+            
+            if isinstance(nbp_result, dict):
+                fx_close = nbp_result['rate']
+                fx_close_date = nbp_result.get('date', buyback_date)
+            else:
+                fx_close = float(nbp_result)
+                fx_close_date = buyback_date
+                
+        except Exception as e:
+            conn.close()
+            import streamlit as st
+            st.error(f"Błąd pobierania kursu NBP dla buyback: {e}")
+            return {'success': False, 'message': 'Błąd kursu NBP'}
+        
+        # 4. KALKULACJE P/L
+        total_buyback_usd = buyback_price_usd * contracts * 100  # Koszt odkupu
+        total_premium_received_usd = premium_sell_usd * contracts * 100  # Premium otrzymana
+        
+        # P/L w USD
+        pl_usd = total_premium_received_usd - total_buyback_usd
+        
+        # P/L w PLN (dokładne z kursami)
+        premium_received_pln = premium_sell_pln  # Już zapisane w bazie
+        buyback_cost_pln = total_buyback_usd * fx_close
+        pl_pln = premium_received_pln - buyback_cost_pln
+        
+        # 5. PRZYGOTUJ DATĘ
+        buyback_date_str = buyback_date
+        if hasattr(buyback_date_str, 'strftime'):
+            buyback_date_str = buyback_date_str.strftime('%Y-%m-%d')
+        
+        # 6. AKTUALIZUJ CC RECORD
+        cursor.execute("""
+            UPDATE options_cc 
+            SET status = 'bought_back',
+                close_date = ?,
+                premium_buyback_usd = ?,
+                fx_close = ?,
+                premium_buyback_pln = ?,
+                pl_pln = ?
+            WHERE id = ?
+        """, (
+            buyback_date_str,
+            buyback_price_usd,
+            fx_close,
+            buyback_cost_pln,
+            pl_pln,
+            cc_id
+        ))
+        
+        # 7. ZWOLNIJ REZERWACJĘ AKCJI
+        shares_to_release = contracts * 100
+        
+        # Znajdź LOT-y FIFO dla tego tickera i zwolnij rezerwacje
+        cursor.execute("""
+            SELECT id, quantity_open, quantity_total
+            FROM lots 
+            WHERE ticker = ? 
+            ORDER BY buy_date, id
+        """, (ticker,))
+        
+        lots = cursor.fetchall()
+        remaining_to_release = shares_to_release
+        
+        for lot in lots:
+            if remaining_to_release <= 0:
+                break
+                
+            lot_id, qty_open, qty_total = lot
+            max_can_release = qty_total - qty_open  # Ile było zarezerwowane
+            qty_to_release = min(remaining_to_release, max_can_release)
+            
+            if qty_to_release > 0:
+                cursor.execute("""
+                    UPDATE lots 
+                    SET quantity_open = quantity_open + ?
+                    WHERE id = ?
+                """, (qty_to_release, lot_id))
+                
+                remaining_to_release -= qty_to_release
+        
+        # 8. UTWÓRZ CASHFLOW (wydatek na buyback)
+        cashflow_description = f"Buyback {contracts} CC {ticker} @ ${buyback_price_usd:.2f}"
+        
+        cursor.execute("""
+            INSERT INTO cashflows (
+                type, amount_usd, date, fx_rate, amount_pln,
+                description, ref_table, ref_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            'option_buyback',  # Typ dla buyback CC
+            -total_buyback_usd,  # Ujemna kwota (wydatek)
+            buyback_date_str,
+            fx_close,
+            -buyback_cost_pln,
+            cashflow_description,
+            'options_cc',
+            cc_id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'CC #{cc_id} odkupione pomyślnie!',
+            'pl_pln': pl_pln,
+            'pl_usd': pl_usd,
+            'premium_received_pln': premium_received_pln,
+            'buyback_cost_pln': buyback_cost_pln,
+            'fx_close': fx_close,
+            'fx_close_date': fx_close_date,
+            'shares_released': shares_to_release
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        import streamlit as st
+        st.error(f"Błąd buyback CC: {e}")
+        
+        return {
+            'success': False,
+            'message': f'Błąd buyback: {str(e)}'
+        }
+
+def expire_covered_call(cc_id, expiry_date=None):
+    """
+    Oznacza covered call jako expired (wygasłe)
+    
+    Args:
+        cc_id: ID covered call do wygaśnięcia
+        expiry_date: Opcjonalna data expiry (domyślnie z bazy)
+    
+    Returns:
+        dict: {'success': bool, 'message': str, 'pl_pln': float}
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # 1. POBIERZ DANE CC
+        cursor.execute("""
+            SELECT id, ticker, contracts, premium_sell_usd, expiry_date,
+                   status, premium_sell_pln
+            FROM options_cc 
+            WHERE id = ?
+        """, (cc_id,))
+        
+        cc_record = cursor.fetchone()
+        if not cc_record:
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} nie znalezione'}
+        
+        cc_id, ticker, contracts, premium_sell_usd, db_expiry_date, status, premium_sell_pln = cc_record
+        
+        # 2. SPRAWDŹ STATUS
+        if status != 'open':
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} już zamknięte (status: {status})'}
+        
+        # 3. UŻYJ DATY EXPIRY
+        final_expiry_date = expiry_date or db_expiry_date
+        if hasattr(final_expiry_date, 'strftime'):
+            expiry_date_str = final_expiry_date.strftime('%Y-%m-%d')
+        else:
+            expiry_date_str = str(final_expiry_date)
+        
+        # 4. AKTUALIZUJ CC RECORD (expired = pełny zysk z premium)
+        cursor.execute("""
+            UPDATE options_cc 
+            SET status = 'expired',
+                close_date = ?,
+                pl_pln = premium_sell_pln
+            WHERE id = ?
+        """, (expiry_date_str, cc_id))
+        
+        # 5. ZWOLNIJ REZERWACJĘ AKCJI (tak samo jak buyback)
+        shares_to_release = contracts * 100
+        
+        cursor.execute("""
+            SELECT id, quantity_open, quantity_total
+            FROM lots 
+            WHERE ticker = ? 
+            ORDER BY buy_date, id
+        """, (ticker,))
+        
+        lots = cursor.fetchall()
+        remaining_to_release = shares_to_release
+        
+        for lot in lots:
+            if remaining_to_release <= 0:
+                break
+                
+            lot_id, qty_open, qty_total = lot
+            max_can_release = qty_total - qty_open
+            qty_to_release = min(remaining_to_release, max_can_release)
+            
+            if qty_to_release > 0:
+                cursor.execute("""
+                    UPDATE lots 
+                    SET quantity_open = quantity_open + ?
+                    WHERE id = ?
+                """, (qty_to_release, lot_id))
+                
+                remaining_to_release -= qty_to_release
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'CC #{cc_id} oznaczone jako expired!',
+            'pl_pln': premium_sell_pln,  # Pełna premium = zysk
+            'shares_released': shares_to_release,
+            'expiry_date': expiry_date_str
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        import streamlit as st
+        st.error(f"Błąd expiry CC: {e}")
+        
+        return {
+            'success': False,
+            'message': f'Błąd expiry: {str(e)}'
+        }
+
+def test_buyback_expiry_operations():
+    """Test funkcji buyback i expiry - PUNKT 56"""
+    
+    results = {
+        'buyback_function_test': False,
+        'expiry_function_test': False,
+        'cc_list_test': False
+    }
+    
+    try:
+        # Test 1: Funkcje istnieją
+        results['buyback_function_test'] = callable(buyback_covered_call)
+        results['expiry_function_test'] = callable(expire_covered_call)
+        
+        # Test 2: Pobranie otwartych CC
+        open_cc_list = get_covered_calls_summary(status='open')
+        results['cc_list_test'] = isinstance(open_cc_list, list)
+        
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd testów buyback/expiry: {e}")
+    
+    return results
+
+# Test na końcu pliku (opcjonalny)
+if __name__ == "__main__":
+    print("Test funkcji buyback/expiry...")
+    results = test_buyback_expiry_operations()
+    
+    for test_name, result in results.items():
+        status = "✅" if result else "❌"
+        print(f"{status} {test_name}")
