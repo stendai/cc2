@@ -1,0 +1,318 @@
+# SPECYFIKACJA KOMPLETNA: STREAMLIT COVERED CALL DASHBOARD
+## Zarządzanie portfelem opcji pokrytych z rozliczeniami podatkowymi PL
+
+**Status: 61/100 punktów ukończone (61%)**  
+**Ostatnia aktualizacja: 2025-01-08**  
+**Aktualny milestone: PUNKT 61 - Blokady sprzedaży akcji pod CC**
+
+---
+
+## 🎯 OGÓLNY OPIS PROJEKTU
+
+### Kontekst biznesowy
+- **Broker**: Lynx (IBKR)
+- **Dane**: Ręczne wprowadzanie w Streamlit (brak importów)
+- **Konto**: Jedno w USD
+- **Rozliczenia**: Każda operacja przeliczana na PLN wg kursu NBP D-1; kurs i kwota PLN utrwalone w bazie
+
+### Rozliczenia podatkowe
+- **PIT-38**: akcje, opcje CC, prowizje, odsetki od margin, odsetki od gotówki, stock lending
+- **PIT-36**: dywidendy (15% WHT + 4% dopłata)
+- **Uwaga**: Przewalutowania walut na rachunku nie są księgowane do PIT
+
+### Moduły aplikacji (8 kart w Streamlit)
+1. **Dashboard**: KPI, equity (USD, MTM), yieldy, alerty
+2. **Stocks**: zakupy w LOT-ach, sprzedaże FIFO, blokady pod CC
+3. **Options (CC)**: sprzedaż, buyback, expiry, rolowanie, rezerwacje FIFO
+4. **Dividends**: brutto USD → PLN, WHT 15%, dopłata 4%, netto
+5. **Cashflows**: pełny dziennik wszystkich przepływów pieniężnych
+6. **Taxes**: rozbicia PIT-38/PIT-36, eksporty CSV
+7. **Stats**: yieldy CC/dividend, P/L per ticker i całościowo
+8. **Charts**: equity curve, cashflow, pie charts, histogramy P/L
+
+---
+
+## 🏗️ ETAP 1: FUNDAMENT APLIKACJI (punkty 1-15) ✅ UKOŃCZONY
+
+### Punkty 1-5: Struktura podstawowa ✅
+1. ✅ Utworzenie struktury katalogów (app.py, db.py, structure.py, utils/, pages/)
+2. ✅ Inicjalizacja głównej aplikacji Streamlit z pustą strukturą nawigacji
+3. ✅ Konfiguracja połączenia z bazą SQLite (portfolio.db)
+4. ✅ Utworzenie podstawowego layout'u aplikacji z sidebar navigation
+5. ✅ Testowanie uruchomienia aplikacji (streamlit run app.py)
+
+### Punkty 6-10: Baza danych i modele ✅
+6. ✅ Implementacja tabeli fx_rates (struktura + podstawowe operacje CRUD)
+7. ✅ Implementacja tabeli cashflows (struktura + podstawowe operacje CRUD) 
+8. ✅ Implementacja tabeli lots (struktura + podstawowe operacje CRUD)
+9. ✅ Implementacja tabeli stock_trades i stock_trade_splits
+10. ✅ Implementacja pozostałych tabel (options_cc, dividends, market_prices)
+
+### Punkty 11-15: Utilities podstawowe ✅
+11. ✅ Implementacja utils/formatting.py (formatowanie liczb, walut, dat)
+12. ✅ Implementacja pobierania kursów NBP z obsługą weekendów/świąt
+13. ✅ Implementacja cache'owania kursów NBP w bazie
+14. ✅ Testowanie pobierania i zapisywania kursów NBP
+15. ✅ Seed database - utworzenie testowych kursów NBP na ostatnie 30 dni
+
+**Status ETAP 1**: ✅ **KOMPLETNY** - Fundament aplikacji gotowy
+
+---
+
+## 💸 ETAP 2: MODUŁ CASHFLOWS (punkty 16-30) ✅ UKOŃCZONY
+
+### Punkty 16-20: Cashflows - struktura i logika ✅
+16. ✅ Utworzenie pages/cashflows.py z podstawową strukturą
+17. ✅ Implementacja formularza dodawania cashflow (wpłaty/wypłaty)
+18. ✅ Implementacja automatycznego pobierania kursu NBP D-1 w formularzu
+19. ✅ Implementacja zapisu cashflow z utrwaleniem fx_rate i amount_pln
+20. ✅ Testowanie dodawania wpłat/wypłat z różnymi datami (włącznie z weekendami)
+
+### Punkty 21-25: Cashflows - UI i funkcjonalności ✅
+21. ✅ Implementacja tabeli wyświetlającej wszystkie cashflows
+22. ✅ Dodanie filtrów (typ operacji, zakres dat, kwoty)
+23. ✅ Implementacja edycji i usuwania cashflows
+24. ✅ Dodanie walidacji (ujemne wypłaty, dodatnie wpłaty)
+25. ✅ Implementacja możliwości ręcznej korekty kursu przed zapisem
+
+### Punkty 26-30: Cashflows - finalizacja ✅
+26. ✅ Dodanie kolumny z linkami do operacji źródłowych (ref_table, ref_id)
+27. ✅ Implementacja eksportu do CSV
+28. ✅ Dodanie statystyk cashflow (suma wpłat, wypłat, saldo)
+29. ✅ Testowanie pełnej funkcjonalności modułu cashflows
+30. ✅ Dokumentacja i refaktoryzacja kodu cashflows
+
+**Status ETAP 2**: ✅ **KOMPLETNY** - Moduł Cashflows z filtrami, edycją, eksportem CSV
+
+---
+
+## 📊 ETAP 3: MODUŁ STOCKS (punkty 31-50) ✅ UKOŃCZONY
+
+### Punkty 31-35: Stocks - zakupy (LOT-y) ✅
+31. ✅ Utworzenie pages/stocks.py z podstawową strukturą
+32. ✅ Implementacja formularza dodawania LOT-a (ticker, quantity, price, date)
+33. ✅ Automatyczne pobieranie kursu NBP D-1 i wyliczanie cost_pln
+34. ✅ Implementacja zapisu LOT-a z prowizjami (broker_fee, reg_fee)
+35. ✅ Dodanie automatycznego tworzenia cashflow przy zakupie akcji
+
+### Punkty 36-40: Stocks - logika FIFO ✅
+36. ✅ Implementacja algorytmu FIFO (sortowanie po buy_date, potem po id)
+37. ✅ Implementacja funkcji sprawdzającej dostępne quantity_open dla tickera
+38. ✅ Implementacja podglądu alokacji FIFO przed sprzedażą
+39. ✅ Testowanie FIFO na różnych scenariuszach (częściowe sprzedaże, różne daty)
+40. ✅ Implementacja walidacji - nie można sprzedać więcej niż quantity_open
+
+### Punkty 41-45: Stocks - sprzedaże ✅
+41. ✅ Implementacja formularza sprzedaży akcji
+42. ✅ Automatyczne rozbijanie sprzedaży na LOT-y według FIFO
+43. ✅ Proporcjonalne dzielenie prowizji sprzedażowej na LOT-y
+44. ✅ Kalkulacja P/L per LOT i całościowy P/L sprzedaży
+45. ✅ Implementacja zapisu stock_trades i stock_trade_splits
+
+### Punkty 46-50: Stocks - UI i finalizacja ✅
+46. ✅ Implementacja tabeli LOT-ów (quantity_open, koszt PLN, kurs, daty)
+47. ✅ Implementacja tabeli sprzedaży z rozbiciami po LOT-ach
+48. ✅ Dodanie filtrów i sortowania w tabelach
+49. ✅ Implementacja eksportu stocks do CSV
+50. ✅ Testowanie pełnej funkcjonalności modułu stocks
+
+**Status ETAP 3**: ✅ **KOMPLETNY** - Moduł Stocks z LOT-ami, FIFO, tabelami, eksportami
+
+---
+
+## 🎯 ETAP 4: MODUŁ OPTIONS - COVERED CALLS (punkty 51-70) 🔄 W TRAKCIE
+
+### Punkty 51-55: Options - struktura i rezerwacje ✅
+51. ✅ Utworzenie pages/options.py z podstawową strukturą
+52. ✅ Implementacja logiki rezerwacji akcji FIFO dla CC
+53. ✅ Implementacja sprawdzania dostępności pokrycia przed zapisem CC
+54. ✅ Implementacja formularza sprzedaży CC (ticker, contracts, strike, premium, expiry)
+55. ✅ Implementacja zapisu options_cc z rezerwacją quantity_open w lots
+
+### Punkty 56-60: Options - operacje CC ✅
+56. ✅ Implementacja automatycznego tworzenia cashflow przy sprzedaży CC
+57. ✅ Implementacja formularza buyback CC
+58. ✅ Implementacja oznaczania CC jako expired (close_date = expiry_date)
+59. ✅ Kalkulacja P/L dla bought_back i expired CC w PLN
+60. ✅ Implementacja zwalniania rezerwacji akcji przy zamknięciu CC
+
+### Punkty 61-65: Options - blokady i walidacje 🔥
+61. ✅ **UKOŃCZONY** - Implementacja blokady sprzedaży akcji pod otwartymi CC
+62. ⏳ Rozszerzenie walidacji w UI stocks z szczegółowymi komunikatami
+63. ⏳ Dodanie przycisków usuwania błędnych CC (z automatycznym zwalnianiem rezerwacji)
+64. ⏳ Implementacja edycji parametrów CC + usuwania rekordów testowych
+65. ⏳ Implementacja funkcji Roll jako dwie operacje (buyback + nowa sprzedaż)
+
+### Punkty 66-70: Options - UI i finalizacja ⏳
+66. ⏳ Implementacja zaawansowanych tabel otwartych CC z rozbiciami po LOT-ach
+67. ⏳ Implementacja tabel zamkniętych CC z P/L PLN i kursami open/close + **CLEANUP UI**
+68. ⏳ Dodanie filtrów zaawansowanych (status, ticker, zakresy dat) + **USUWANIE INFO DEWELOPERSKICH**
+69. ⏳ Implementacja eksportu options do CSV + **NARZĘDZIA CLEANUP**
+70. ⏳ Testowanie pełnej funkcjonalności modułu options + **FINALIZACJA PROFESJONALNEGO UI**
+
+**Status ETAP 4**: 🔄 **61/70 ukończone (87%)** - Options z blokadami CC działają!
+
+---
+
+## 💰 ETAP 5: MODUŁ DIVIDENDS (punkty 71-80) ⏳ PLANOWANY
+
+### Punkty 71-75: Dividends - logika podstawowa
+71. Utworzenie pages/dividends.py z podstawową strukturą
+72. Implementacja formularza dywidend (ticker, gross_usd, date_paid)
+73. Automatyczne wyliczanie WHT 15% i dopłaty 4%
+74. Implementacja zapisu dividends z wszystkimi polami PLN
+75. Automatyczne tworzenie cashflow typu 'dividend'
+
+### Punkty 76-80: Dividends - UI i finalizacja
+76. Implementacja tabeli dywidend z rozbiciami (brutto, WHT, dopłata, netto)
+77. Dodanie filtrów i sortowania + **przyciski edycji/usuwania dywidend**
+78. Implementacja eksportu dividends do CSV
+79. Integracja z modułem taxes (kategoria PIT-36)
+80. Testowanie pełnej funkcjonalności modułu dividends + **cleanup błędnych rekordów**
+
+**Status ETAP 5**: ⏳ **PLANOWANY** - Start po ukończeniu ETAPU 4
+
+---
+
+## 📋 ETAP 6: MODUŁ TAXES - ROZLICZENIA PODATKOWE (punkty 81-90) ⏳ PLANOWANY
+
+### Punkty 81-85: Taxes - logika PIT
+81. Utworzenie pages/taxes.py i utils/tax.py
+82. Implementacja logiki PIT-38 (przychody i koszty)
+83. Implementacja logiki PIT-36 (dywidendy z rozbiciami)
+84. Implementacja agregacji danych z wszystkich modułów
+85. Kalkulacja sum dla PIT-38 (razem przychody/koszty) i PIT-36 + **narzędzia administracyjne**
+
+### Punkty 86-90: Taxes - raporty i eksporty
+86. Implementacja szczegółowych tabel rozbić PIT-38/PIT-36 + **batch operations**
+87. Implementacja eksportów CSV (PIT-38.csv, PIT-36.csv)
+88. Dodanie filtrów okresowych (rok podatkowy, kwartały) + **zarządzanie błędami podatkowymi**
+89. Implementacja dodatkowych eksportów (Cashflows.csv, etc.) + **audit trail**
+90. Testowanie poprawności kalkulacji podatkowych + **backup/restore narzędzia**
+
+**Status ETAP 6**: ⏳ **PLANOWANY** - Start po ukończeniu ETAPU 5
+
+---
+
+## 📈 ETAP 7: DASHBOARD I FINALIZACJA (punkty 91-100) ⏳ PLANOWANY
+
+### Punkty 91-95: Dashboard - KPI i alerty
+91. Utworzenie pages/dashboard.py z zaawansowaną strukturą
+92. Integracja z yfinance dla cen akcji (cache w market_prices)
+93. Implementacja KPI (wartość portfela USD, wolna gotówka, P/L YTD)
+94. Implementacja yield calculations (CC yield, dividend yield)
+95. Implementacja systemu alertów (expiry, pokrycie, yieldy) + **stats.py z yield analizami**
+
+### Punkty 96-100: Finalizacja projektu
+96. Utworzenie pages/charts.py - wykresy equity curve, cashflow, pie charts
+97. Implementacja histogramów P/L i zaawansowanych wizualizacji
+98. **Przeprowadzenie pełnych testów end-to-end** + **usunięcie WSZYSTKICH info deweloperskich**
+99. **Optymalizacja performance i finalne poprawki UI/UX** + **profesjonalizacja interfejsu**
+100. **Dokumentacja końcowa i instrukcja obsługi** + **release production-ready**
+
+**Status ETAP 7**: ⏳ **PLANOWANY** - Finalizacja i release
+
+---
+
+## 🗑️ NOWE FUNKCJONALNOŚCI - ZARZĄDZANIE DANYMI
+
+### **Dodane do specyfikacji w trakcie realizacji:**
+
+#### **PUNKT 63-64: Zarządzanie błędami (ETAP 4)**
+- 🗑️ **Usuwanie błędnych operacji** w każdym module (CC, stocks, cashflows, dividends)
+- 🔄 **Edycja parametrów** przed zapisem
+- ⚠️ **Potwierdzenia bezpieczeństwa** przed usunięciem
+- 🧹 **Cleanup rekordów testowych** (bulk operations)
+- 🔒 **Zabezpieczenia** przed przypadkowym usunięciem
+
+#### **PUNKT 67-68: Oczyszczanie UI (ETAP 4)**
+- 🚫 **Usunięcie komunikatów "PUNKT X UKOŃCZONY"** z wszystkich modułów
+- 🚫 **Usunięcie testowych buttonów** i debug info
+- 🚫 **Usunięcie szczegółów implementacyjnych** z UI
+- ✨ **Profesjonalne komunikaty** zamiast deweloperskich
+- 📱 **Responsive design** dla różnych urządzeń
+
+#### **PUNKT 85-86: Zaawansowane zarządzanie (ETAP 6)**
+- 🗄️ **Backup/restore** bazy danych
+- 🧹 **Cleanup narzędzia** (usuwanie starych danych)
+- 🔍 **Audit trail** (kto, kiedy, co usunął)
+- 📦 **Bulk operations** (masowe usuwanie/edytowanie)
+- 🚚 **Export/import** danych
+
+#### **PUNKT 98-99: Finalna profesjonalizacja (ETAP 7)**
+- 🎨 **Usunięcie WSZYSTKICH** pozostałości deweloperskich
+- ✨ **Finalne UI/UX** na poziomie produkcyjnym
+- 📋 **Instrukcje użytkownika** zamiast dokumentacji technicznej
+- 🏆 **Production-ready release**
+
+---
+
+## 🎯 KRYTERIA AKCEPTACJI
+
+### ✅ Must-have (MVP)
+- [x] Każda operacja ma utrwalony kurs NBP D-1 i kwoty PLN
+- [x] FIFO sprzedaży działa i pokazuje rozbicie po LOT-ach  
+- [x] Blokada sprzedaży akcji pod otwartym CC
+- [ ] Rolowanie jako dwie osobne operacje
+- [ ] Dashboard z equity (USD), yieldami i alertami
+- [ ] Taxes z rozbiciami PIT-38/PIT-36 i eksportami CSV
+- [x] Kursy NBP pobierane automatycznie z możliwością korekty
+
+### 🎯 Nice-to-have (Future)
+- [ ] Import danych z IBKR/Lynx
+- [ ] Zaawansowane wykresy (Plotly)
+- [ ] Corporate actions handling
+- [ ] Multi-account support
+- [ ] Mobile-responsive UI
+
+---
+
+## 📊 PROGRESS TRACKING
+
+**Aktualny stan: 61/100 punktów (61%)**
+
+### Status per etap:
+- ✅ **ETAP 1** (1-15): 15/15 = 100% ✅
+- ✅ **ETAP 2** (16-30): 15/15 = 100% ✅  
+- ✅ **ETAP 3** (31-50): 20/20 = 100% ✅
+- 🔥 **ETAP 4** (51-70): 11/20 = 55% 🔄
+- ⏳ **ETAP 5** (71-80): 0/10 = 0% ⏳
+- ⏳ **ETAP 6** (81-90): 0/10 = 0% ⏳
+- ⏳ **ETAP 7** (91-100): 0/10 = 0% ⏳
+
+### Najbliższe milestone:
+🎯 **PUNKT 62**: Rozszerzenie walidacji blokad CC
+🎯 **PUNKT 70**: Ukończenie ETAPU 4 = 70% projektu!
+
+---
+
+## 🚀 PLAN REALIZACJI - NASTĘPNE KROKI
+
+### **Za 1 tydzień (punkty 62-65):**
+- Finalizacja blokad CC
+- Dodanie funkcji usuwania błędnych operacji
+- Edycja parametrów CC
+
+### **Za 2 tygodnie (punkty 66-70):**
+- Oczyszczanie UI z info deweloperskich
+- Zaawansowane tabele i filtry
+- **UKOŃCZENIE ETAPU 4 = 70% projektu!**
+
+### **Za 4 tygodnie (punkty 71-80):**
+- Pełny moduł Dividends
+- **UKOŃCZENIE ETAPU 5 = 80% projektu!**
+
+### **Za 6 tygodni (punkty 81-90):**
+- Pełny moduł Taxes
+- **UKOŃCZENIE ETAPU 6 = 90% projektu!**
+
+### **Za 8 tygodni (punkty 91-100):**
+- Dashboard, Charts, finalizacja
+- **🏆 RELEASE PRODUCTION-READY = 100%!**
+
+---
+
+**Ostatnia aktualizacja**: 2025-01-08  
+**Przez**: Assistant Claude  
+**Status**: PUNKT 61 ukończony - Blokady CC działają!  
+**Następny milestone**: PUNKT 62-70 - Finalizacja ETAPU 4

@@ -1731,6 +1731,61 @@ def test_buyback_expiry_operations():
     
     return results
 
+def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
+    """
+    PUNKT 61: Sprawdza czy można sprzedać akcje bez naruszenia pokrycia otwartych CC
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'can_sell': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        ticker_upper = ticker.upper()
+        
+        # Pobierz wszystkie dostępne akcje
+        cursor.execute("""
+            SELECT SUM(quantity_open) as total_available
+            FROM lots 
+            WHERE ticker = ? AND quantity_open > 0
+        """, (ticker_upper,))
+        
+        result = cursor.fetchone()
+        total_available = result[0] if result and result[0] else 0
+        
+        # Pobierz otwarte CC dla tego tickera
+        cursor.execute("""
+            SELECT id, contracts, strike_usd, expiry_date
+            FROM options_cc 
+            WHERE ticker = ? AND status = 'open'
+        """, (ticker_upper,))
+        
+        open_cc_list = cursor.fetchall()
+        
+        # Oblicz zarezerwowane akcje
+        reserved_for_cc = sum([cc[1] * 100 for cc in open_cc_list])  # contracts * 100
+        available_to_sell = total_available - reserved_for_cc
+        can_sell = quantity_to_sell <= available_to_sell
+        
+        conn.close()
+        
+        blocking_cc = [{'cc_id': cc[0], 'contracts': cc[1], 'shares_reserved': cc[1]*100, 
+                       'strike_usd': cc[2], 'expiry_date': cc[3]} 
+                      for cc in open_cc_list]
+        
+        return {
+            'can_sell': can_sell,
+            'available_to_sell': available_to_sell,
+            'reserved_for_cc': reserved_for_cc,
+            'total_available': total_available,
+            'blocking_cc': blocking_cc,
+            'message': 'OK' if can_sell else f'Nie można sprzedać - zarezerwowane pod CC'
+        }
+        
+    except Exception as e:
+        return {'can_sell': False, 'message': f'Błąd: {str(e)}', 
+                'available_to_sell': 0, 'reserved_for_cc': 0, 'total_available': 0, 'blocking_cc': []}
+
 # Test na końcu pliku (opcjonalny)
 if __name__ == "__main__":
     print("Test funkcji buyback/expiry...")

@@ -521,13 +521,80 @@ def show_sales_tab():
                             "reg_fee": sell_reg_fee
                         }
                         st.session_state.show_sell_preview = True
+
+                        # 🚨 PUNKT 61: SPRAWDŹ BLOKADY CC PRZED POKAZANIEM PODGLĄDU
+                        cc_check = db.check_cc_restrictions_before_sell(ticker_clean, sell_quantity)
+                        if not cc_check['can_sell']:
+                            st.session_state.cc_restriction_error = cc_check
+
                         st.success(f"✅ Sprzedaż {sell_quantity} {ticker_clean} - przygotowano do podglądu")
                         
                 except Exception as e:
                     st.error(f"❌ Błąd sprawdzania dostępności: {e}")
     
     # 🔧 POKAZUJ PODGLĄD SPRZEDAŻY - POZA KOLUMNAMI!
+# 🔧 POKAZUJ PODGLĄD SPRZEDAŻY - POZA KOLUMNAMI!
     if 'show_sell_preview' in st.session_state and st.session_state.show_sell_preview:
+        
+        # 🚨 PUNKT 61: SPRAWDŹ BŁĘDY BLOKAD CC NAJPIERW!
+        if 'cc_restriction_error' in st.session_state:
+            cc_error = st.session_state.cc_restriction_error
+            
+            st.markdown("---")
+            st.markdown("## 🚨 BLOKADA SPRZEDAŻY - OTWARTE COVERED CALLS")
+            
+            st.error("❌ **NIE MOŻNA SPRZEDAĆ AKCJI - ZAREZERWOWANE POD COVERED CALLS!**")
+            
+            col_error1, col_error2 = st.columns(2)
+            
+            with col_error1:
+                st.markdown("### 📊 Szczegóły blokady:")
+                st.write(f"🎯 **Do sprzedaży**: {st.session_state.sell_form_data['quantity']} akcji")
+                st.write(f"📦 **Łącznie dostępne**: {cc_error['total_available']} akcji")
+                st.write(f"🔒 **Zarezerwowane pod CC**: {cc_error['reserved_for_cc']} akcji")
+                st.write(f"✅ **Można sprzedać**: {cc_error['available_to_sell']} akcji")
+                
+                if cc_error['available_to_sell'] > 0:
+                    st.warning(f"💡 **Maksymalna sprzedaż**: {cc_error['available_to_sell']} akcji")
+                else:
+                    st.error("🚫 **Brak dostępnych akcji do sprzedaży**")
+            
+            with col_error2:
+                st.markdown("### 🎯 Blokujące Covered Calls:")
+                
+                for cc in cc_error['blocking_cc']:
+                    with st.expander(f"CC #{cc['cc_id']} - {cc['contracts']} kontraktów", expanded=False):
+                        st.write(f"📦 **Zarezerwowane**: {cc['shares_reserved']} akcji")
+                        st.write(f"💰 **Strike**: ${cc['strike_usd']:.2f}")
+                        st.write(f"📅 **Expiry**: {cc['expiry_date']}")
+            
+            # ROZWIĄZANIA
+            st.markdown("### 💡 Rozwiązania:")
+            col_solution1, col_solution2, col_solution3 = st.columns(3)
+            
+            with col_solution1:
+                if st.button("💰 Odkup CC", key="buyback_cc_solution"):
+                    st.info("👉 Przejdź do zakładki Options → Buyback & Expiry")
+            
+            with col_solution2:
+                if cc_error['available_to_sell'] > 0:
+                    if st.button("📉 Zmniejsz sprzedaż", key="reduce_sell_solution"):
+                        # Automatycznie ustaw maksymalną możliwą sprzedaż
+                        st.session_state.sell_form_data['quantity'] = cc_error['available_to_sell']
+                        # Usuń błąd blokady
+                        del st.session_state.cc_restriction_error
+                        st.success(f"✅ Zmieniono na {cc_error['available_to_sell']} akcji")
+                        st.rerun()
+            
+            with col_solution3:
+                if st.button("❌ Anuluj sprzedaż", key="cancel_sell_solution"):
+                    clear_sell_session_state()
+                    st.rerun()
+            
+            # Nie pokazuj normalnego podglądu jeśli jest blokada
+            return
+        
+        # ✅ NORMALNY PODGLĄD SPRZEDAŻY (bez blokad CC)
         if 'sell_form_data' in st.session_state:
             st.markdown("---")
             st.markdown("## 💰 Podgląd sprzedaży FIFO")
@@ -579,8 +646,8 @@ def show_sales_tab():
                 st.rerun()
 
 def clear_sell_session_state():
-    """Wyczyść session state dla sprzedaży"""
-    keys_to_clear = ['sell_to_save', 'show_sell_preview', 'sell_form_data']
+    """Wyczyść session state dla sprzedaży - PUNKT 61: Z obsługą blokad CC"""
+    keys_to_clear = ['sell_to_save', 'show_sell_preview', 'sell_form_data', 'cc_restriction_error']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
