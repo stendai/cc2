@@ -259,6 +259,45 @@ def show_lot_preview_persistent(ticker, quantity, buy_price, buy_date, broker_fe
     }
 
 def show_stocks():
+        # PUNKT 62: Quick Check widget w sidebar
+    with st.sidebar:
+        st.markdown("### 🔍 Quick Check")
+        try:
+            all_tickers = db.get_all_tickers()
+            quick_ticker = st.selectbox(
+                "Sprawdź ticker:",
+                options=[""] + all_tickers,
+                key="quick_check_ticker"
+            )
+            
+            if quick_ticker:
+                try:
+                    total = db.get_total_quantity(quick_ticker)
+                    available = db.get_available_quantity(quick_ticker)
+                    reserved = total - available
+                    
+                    st.metric("Posiadane", total)
+                    if total > 0:
+                        percentage = f"{available/total*100:.0f}%"
+                        st.metric("Dostępne", available, delta=percentage)
+                    else:
+                        st.metric("Dostępne", 0, delta="0%")
+                    
+                    if reserved > 0:
+                        st.metric("Zarezerwowane", reserved, delta="Pod CC", delta_color="inverse")
+                        try:
+                            cc_list = db.get_open_cc_for_ticker(quick_ticker)
+                            if cc_list:
+                                st.caption(f"CC: {len(cc_list)} otwartych")
+                        except:
+                            pass
+                    else:
+                        st.success("✅ Brak blokad CC")
+                    
+                except Exception as e:
+                    st.error(f"Błąd: {e}")
+        except Exception as e:
+            st.warning("⚠️ Brak danych akcji")
     """Główna funkcja modułu Stocks - PUNKT 49 DODANY"""
     st.header("📊 Stocks - Zarządzanie akcjami")
     st.markdown("*Zakupy LOT-ów, sprzedaże FIFO, P/L tracking*")
@@ -477,6 +516,66 @@ def show_sales_tab():
         with st.form("sell_stocks_form"):
             # Podstawowe pola
             sell_ticker = st.text_input("Ticker:", placeholder="np. AAPL", help="Symbol akcji do sprzedaży")
+            # DODAJ BEZPOŚREDNIO PO LINII: sell_ticker = st.text_input("Ticker:", ...)
+
+            # PUNKT 62: Real-time info o dostępności
+            if sell_ticker and len(sell_ticker.strip()) > 0:
+                ticker_clean = sell_ticker.upper().strip()
+                try:
+                    # Pobierz szczegółowe info o dostępności
+                    available = db.get_available_quantity(ticker_clean)
+                    total_owned = db.get_total_quantity(ticker_clean)
+                    
+                    if total_owned > 0:
+                        reserved_for_cc = total_owned - available
+                        
+                        # Pokazuj status dostępności w czasie rzeczywistym
+                        col_avail1, col_avail2, col_avail3 = st.columns(3)
+                        
+                        with col_avail1:
+                            st.metric(
+                                label="💼 Posiadane", 
+                                value=f"{total_owned}",
+                                help="Łączna liczba posiadanych akcji"
+                            )
+                        
+                        with col_avail2:
+                            st.metric(
+                                label="✅ Dostępne", 
+                                value=f"{available}",
+                                delta=f"Wolne do sprzedaży",
+                                delta_color="normal",
+                                help="Akcje nie zarezerwowane pod Covered Calls"
+                            )
+                        
+                        with col_avail3:
+                            if reserved_for_cc > 0:
+                                st.metric(
+                                    label="🔒 Zarezerwowane", 
+                                    value=f"{reserved_for_cc}",
+                                    delta="Pod Covered Calls",
+                                    delta_color="inverse",
+                                    help="Akcje zarezerwowane pod otwarte CC"
+                                )
+                            else:
+                                st.metric(
+                                    label="🔒 Zarezerwowane", 
+                                    value="0",
+                                    delta="Brak blokad",
+                                    delta_color="normal"
+                                )
+                        
+                        # Ostrzeżenie gdy jest mało dostępnych akcji
+                        if available > 0 and reserved_for_cc > 0:
+                            if available < (total_owned * 0.3):  # Mniej niż 30% dostępne
+                                st.warning(f"⚠️ **Uwaga**: Większość akcji ({reserved_for_cc}/{total_owned}) zarezerwowana pod Covered Calls")
+                            else:
+                                st.info(f"ℹ️ Część akcji ({reserved_for_cc}) zarezerwowana pod Covered Calls")
+                        elif available == 0:
+                            st.error("🚫 **Wszystkie akcje zablokowane** przez otwarte Covered Calls!")
+                            
+                except Exception as e:
+                    st.warning(f"⚠️ Nie można sprawdzić dostępności: {e}")
             sell_quantity = st.number_input("Ilość akcji:", min_value=1, value=50, step=1)
             sell_price = st.number_input("Cena sprzedaży USD:", min_value=0.01, value=160.00, step=0.01)
             sell_date = st.date_input("Data sprzedaży:", value=date.today(), help="Data transakcji sprzedaży")
@@ -526,6 +625,71 @@ def show_sales_tab():
                         cc_check = db.check_cc_restrictions_before_sell(ticker_clean, sell_quantity)
                         if not cc_check['can_sell']:
                             st.session_state.cc_restriction_error = cc_check
+                            # ZNAJDŹ W stocks.py ten fragment i ZAMIEŃ GO:
+
+                        # ✅ ZAPISZ DANE SPRZEDAŻY DO SESSION_STATE
+                        st.session_state.sell_form_data = {
+                            "ticker": ticker_clean,
+                            "quantity": sell_quantity,
+                            "sell_price": sell_price,
+                            "sell_date": sell_date,
+                            "broker_fee": sell_broker_fee,
+                            "reg_fee": sell_reg_fee
+                        }
+                        st.session_state.show_sell_preview = True
+
+                        # 🚨 PUNKT 61: SPRAWDŹ BLOKADY CC PRZED POKAZANIEM PODGLĄDU
+                        cc_check = db.check_cc_restrictions_before_sell(ticker_clean, sell_quantity)
+                        if not cc_check['can_sell']:
+                            st.session_state.cc_restriction_error = cc_check
+
+                        # 🔍 TYMCZASOWA DIAGNOSTYKA - PUNKT 62 DEBUG
+                        with st.expander("🔍 DIAGNOSTYKA CC (tymczasowa)", expanded=False):
+                            st.markdown("**Porównanie funkcji dostępności:**")
+                            
+                            available1 = db.get_available_quantity(ticker_clean)  
+                            available2 = db.get_total_quantity(ticker_clean)
+                            
+                            col_diag1, col_diag2 = st.columns(2)
+                            with col_diag1:
+                                st.write(f"**get_available_quantity():** {available1}")
+                                st.write(f"**get_total_quantity():** {available2}")
+                                st.write(f"**Do sprzedaży:** {sell_quantity}")
+                            
+                            with col_diag2:
+                                st.write(f"**cc_check can_sell:** {cc_check.get('can_sell')}")
+                                st.write(f"**cc_check total_available:** {cc_check.get('total_available')}")
+                                st.write(f"**cc_check available_to_sell:** {cc_check.get('available_to_sell')}")
+                                st.write(f"**cc_check reserved_for_cc:** {cc_check.get('reserved_for_cc')}")
+                            
+                            # Debug info z funkcji
+                            debug_info = cc_check.get('debug_info', {})
+                            if debug_info:
+                                st.markdown("**Debug info:**")
+                                st.json(debug_info)
+                            
+                            # Szczegóły blokujących CC
+                            blocking_cc = cc_check.get('blocking_cc', [])
+                            if blocking_cc:
+                                st.markdown(f"**Blokujące CC ({len(blocking_cc)}):**")
+                                for cc in blocking_cc:
+                                    st.write(f"- CC #{cc['cc_id']}: {cc['contracts']} kontraktów = {cc['shares_reserved']} akcji")
+                            else:
+                                st.success("✅ Brak blokujących CC")
+                            
+                            # Przycisk dodatkowej diagnostyki
+                            if st.button("🔍 Pełna diagnostyka", key="full_debug"):
+                                debug_result = db.debug_cc_restrictions(ticker_clean)
+                                st.info(f"Debug result: {debug_result}")
+                                st.caption("Sprawdź szczegóły w konsoli/terminalu")
+                                
+                                                        # Dodaj w diagnostyce
+                            if st.button("🔧 NAPRAW istniejące CC", key="fix_cc"):
+                                result = db.fix_existing_cc_reservations()
+                                st.success(f"Wynik naprawki: {result}")
+                                st.info("Sprawdź konsolę dla szczegółów")
+
+                        st.success(f"✅ Sprzedaż {sell_quantity} {ticker_clean} - przygotowano do podglądu")
 
                         st.success(f"✅ Sprzedaż {sell_quantity} {ticker_clean} - przygotowano do podglądu")
                         
@@ -537,11 +701,155 @@ def show_sales_tab():
     if 'show_sell_preview' in st.session_state and st.session_state.show_sell_preview:
         
         # 🚨 PUNKT 61: SPRAWDŹ BŁĘDY BLOKAD CC NAJPIERW!
+# ZAMIEŃ ISTNIEJĄCY BLOK z 'cc_restriction_error' NA TEN KOD:
+
         if 'cc_restriction_error' in st.session_state:
             cc_error = st.session_state.cc_restriction_error
             
             st.markdown("---")
+            
+            # Header z ikoną i kolorem
             st.markdown("## 🚨 BLOKADA SPRZEDAŻY - OTWARTE COVERED CALLS")
+            st.error("❌ **NIE MOŻNA SPRZEDAĆ AKCJI - ZAREZERWOWANE POD COVERED CALLS!**")
+            
+            # Alert box z kluczowymi informacjami
+            with st.container():
+                st.markdown("""
+                <div style='background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 10px 0;'>
+                <strong>🎯 Problem:</strong> Próbujesz sprzedać więcej akcji niż jest dostępnych.<br>
+                <strong>🔒 Przyczyna:</strong> Część akcji jest zarezerwowana pod otwarte Covered Calls.<br>
+                <strong>💡 Rozwiązanie:</strong> Odkup CC lub zmniejsz ilość sprzedaży.
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Szczegółowa analiza w kolumnach
+            col_analysis1, col_analysis2 = st.columns([2, 3])
+            
+            with col_analysis1:
+                st.markdown("### 📊 Analiza sytuacji:")
+                
+                # Metryki z kolorami
+                st.metric(
+                    label="🎯 Do sprzedaży",
+                    value=f"{st.session_state.sell_form_data['quantity']}",
+                    help="Ilość akcji do sprzedaży"
+                )
+                
+                st.metric(
+                    label="📦 Łącznie posiadane",
+                    value=f"{cc_error['total_available'] + cc_error['reserved_for_cc']}",
+                    help="Wszystkie akcje w portfelu"
+                )
+                
+                st.metric(
+                    label="🔒 Zablokowane",
+                    value=f"{cc_error['reserved_for_cc']}",
+                    delta="Pod Covered Calls",
+                    delta_color="inverse",
+                    help="Akcje zarezerwowane pod otwarte CC"
+                )
+                
+                if cc_error['available_to_sell'] > 0:
+                    st.metric(
+                        label="✅ Można sprzedać",
+                        value=f"{cc_error['available_to_sell']}",
+                        delta="Akcji wolnych",
+                        delta_color="normal",
+                        help="Maksymalna możliwa sprzedaż"
+                    )
+                else:
+                    st.metric(
+                        label="✅ Można sprzedać",
+                        value="0",
+                        delta="Brak wolnych",
+                        delta_color="inverse"
+                    )
+            
+            with col_analysis2:
+                st.markdown("### 🎯 Szczegóły blokujących Covered Calls:")
+                
+                # Tabela z CC w ładnym formacie
+                cc_data = []
+                
+                for cc in cc_error['blocking_cc']:
+                    cc_data.append({
+                        'ID': f"CC#{cc['cc_id']}",
+                        'Kontrakty': cc['contracts'],
+                        'Akcje': f"{cc['shares_reserved']}",
+                        'Strike': f"${cc['strike_usd']:.2f}",
+                        'Expiry': cc['expiry_date'],
+                        'Status': 'Otwarte ⏳'
+                    })
+                
+                if cc_data:
+                    import pandas as pd
+                    df_cc = pd.DataFrame(cc_data)
+                    st.dataframe(
+                        df_cc, 
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            'ID': st.column_config.TextColumn("CC ID", help="Identyfikator Covered Call"),
+                            'Kontrakty': st.column_config.NumberColumn("Kontrakty", help="Liczba kontraktów"),
+                            'Akcje': st.column_config.TextColumn("Akcje", help="Zarezerwowane akcje"),
+                            'Strike': st.column_config.TextColumn("Strike", help="Cena wykonania"),
+                            'Expiry': st.column_config.DateColumn("Wygaśnięcie", help="Data wygaśnięcia"),
+                            'Status': st.column_config.TextColumn("Status", help="Stan opcji")
+                        }
+                    )
+            
+            # Rozwiązania w lepszym formacie
+            st.markdown("---")
+            st.markdown("### 💡 Dostępne rozwiązania:")
+            
+            col_solution1, col_solution2, col_solution3 = st.columns(3)
+            
+            with col_solution1:
+                st.markdown("**🔄 Odkup Covered Calls**")
+                st.markdown("*Zamknij pozycję CC i uwolnij akcje*")
+                if st.button("💰 Przejdź do Odkupu", key="buyback_cc_solution", use_container_width=True):
+                    st.info("👉 Przejdź do zakładki Options → Buyback & Expiry")
+            
+            with col_solution2:
+                if cc_error['available_to_sell'] > 0:
+                    st.markdown("**📉 Zmniejsz sprzedaż**")
+                    st.markdown(f"*Maksymalnie: {cc_error['available_to_sell']} akcji*")
+                    if st.button(f"⚡ Ustaw {cc_error['available_to_sell']} akcji", key="reduce_sell_solution", use_container_width=True):
+                        # Automatycznie ustaw maksymalną możliwą sprzedaż
+                        st.session_state.sell_form_data['quantity'] = cc_error['available_to_sell']
+                        # Usuń błąd blokady
+                        del st.session_state.cc_restriction_error
+                        st.success(f"✅ Zmieniono na {cc_error['available_to_sell']} akcji")
+                        st.rerun()
+                else:
+                    st.markdown("**📉 Zmniejsz sprzedaż**")
+                    st.markdown("*Brak dostępnych akcji*")
+                    st.button("❌ Niemożliwe", disabled=True, use_container_width=True)
+            
+            with col_solution3:
+                st.markdown("**⏰ Poczekaj na expiry**")
+                # Znajdź najbliższe expiry
+                earliest_expiry = min([cc['expiry_date'] for cc in cc_error['blocking_cc']])
+                st.markdown(f"*Najbliższe: {earliest_expiry}*")
+                st.button("📅 Sprawdź daty", key="check_expiry_solution", use_container_width=True)
+            
+            # Anulowanie operacji
+            st.markdown("---")
+            col_cancel1, col_cancel2 = st.columns([3, 1])
+            with col_cancel2:
+                if st.button("❌ Anuluj sprzedaż", key="cancel_sell_solution", type="secondary"):
+                    # Wyczyść wszystkie dane sprzedaży (użyj istniejącej funkcji clear_sell_session_state)
+                    if 'sell_form_data' in st.session_state:
+                        del st.session_state.sell_form_data
+                    if 'show_sell_preview' in st.session_state:
+                        del st.session_state.show_sell_preview
+                    if 'cc_restriction_error' in st.session_state:
+                        del st.session_state.cc_restriction_error
+                    st.success("✅ Operacja sprzedaży anulowana")
+                    st.rerun()
+            
+            # Nie pokazuj normalnego podglądu jeśli jest blokada
+            return
             
             st.error("❌ **NIE MOŻNA SPRZEDAĆ AKCJI - ZAREZERWOWANE POD COVERED CALLS!**")
             

@@ -1216,15 +1216,12 @@ def test_cc_reservations():
 
 # DODAJ NA KOŃCU db.py - PUNKT 54: ZAPIS CC DO BAZY
 
+# PUNKT 61.5: NAPRAWKA REZERWACJI w db.py
+# Znajdź funkcję save_covered_call_to_database i ZAMIEŃ fragment z rezerwacją akcji:
+
 def save_covered_call_to_database(cc_data):
     """
     Zapisuje covered call do bazy z rezerwacją akcji FIFO
-    
-    Args:
-        cc_data: dict z danymi CC z formularza
-    
-    Returns:
-        dict: {'success': bool, 'cc_id': int, 'message': str}
     """
     try:
         conn = get_connection()
@@ -1271,25 +1268,62 @@ def save_covered_call_to_database(cc_data):
         
         cc_id = cursor.lastrowid
         
-        # 4. REZERWUJ AKCJE FIFO - FAKTYCZNIE!
+        # 4. 🔥 NAPRAWIONA REZERWACJA AKCJI FIFO
         shares_to_reserve = cc_data['contracts'] * 100
         remaining_to_reserve = shares_to_reserve
         
-        for allocation in coverage['fifo_preview']:
+        # Pobierz LOT-y FIFO z aktualnym quantity_open
+        cursor.execute("""
+            SELECT id, quantity_open
+            FROM lots 
+            WHERE ticker = ? AND quantity_open > 0
+            ORDER BY buy_date, id
+        """, (cc_data['ticker'],))
+        
+        available_lots = cursor.fetchall()
+        
+        print(f"🔧 REZERWACJA dla CC #{cc_id}:")
+        print(f"   Do zarezerwowania: {shares_to_reserve} akcji")
+        print(f"   Dostępne LOT-y: {len(available_lots)}")
+        
+        reserved_lots = []
+        
+        for lot_id, current_qty_open in available_lots:
             if remaining_to_reserve <= 0:
                 break
             
-            lot_id = allocation['lot_id']
-            qty_to_reserve = min(remaining_to_reserve, allocation['qty_to_reserve'])
+            qty_to_reserve_from_lot = min(remaining_to_reserve, current_qty_open)
+            new_qty_open = current_qty_open - qty_to_reserve_from_lot
             
-            # AKTUALIZUJ quantity_open w LOT-ach
+            # AKTUALIZUJ quantity_open w LOT-ach - KLUCZOWE!
             cursor.execute("""
                 UPDATE lots 
-                SET quantity_open = quantity_open - ?
+                SET quantity_open = ?
                 WHERE id = ?
-            """, (qty_to_reserve, lot_id))
+            """, (new_qty_open, lot_id))
             
-            remaining_to_reserve -= qty_to_reserve
+            reserved_lots.append({
+                'lot_id': lot_id,
+                'was_open': current_qty_open,
+                'reserved': qty_to_reserve_from_lot,
+                'now_open': new_qty_open
+            })
+            
+            remaining_to_reserve -= qty_to_reserve_from_lot
+            
+            print(f"   LOT #{lot_id}: {current_qty_open} -> {new_qty_open} (reserved: {qty_to_reserve_from_lot})")
+        
+        # Sprawdź czy udało się zarezerwować wszystkie
+        if remaining_to_reserve > 0:
+            conn.rollback()
+            conn.close()
+            return {
+                'success': False,
+                'message': f'Nie udało się zarezerwować {remaining_to_reserve} akcji'
+            }
+        
+        print(f"✅ Zarezerwowano {shares_to_reserve} akcji dla CC #{cc_id}")
+        print(f"   Użyto {len(reserved_lots)} LOT-ów")
         
         # 5. UTWÓRZ CASHFLOW (przychód z premium)
         total_premium_usd = cc_data['premium_sell_usd'] * cc_data['contracts'] * 100
@@ -1318,7 +1352,8 @@ def save_covered_call_to_database(cc_data):
         return {
             'success': True,
             'cc_id': cc_id,
-            'message': f'CC #{cc_id} zapisane pomyślnie!'
+            'message': f'CC #{cc_id} zapisane pomyślnie!',
+            'reserved_details': reserved_lots
         }
         
     except Exception as e:
@@ -1333,6 +1368,109 @@ def save_covered_call_to_database(cc_data):
             'success': False,
             'message': f'Błąd zapisu: {str(e)}'
         }
+
+
+# DODAJ TAKŻE FUNKCJĘ NAPRAWCZĄ:
+
+def fix_existing_cc_reservations():
+    """
+    FUNKCJA NAPRAWCZA: Naprawia rezerwacje dla istniejących CC
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return "Brak połączenia z bazą"
+        
+        cursor = conn.cursor()
+        
+        # Pobierz wszystkie otwarte CC
+        cursor.execute("""
+            SELECT id, ticker, contracts
+            FROM options_cc 
+            WHERE status = 'open'
+            ORDER BY id
+        """)
+        
+        open_cc_list = cursor.fetchall()
+        
+        if not open_cc_list:
+            conn.close()
+            return "Brak otwartych CC do naprawienia"
+        
+        print(f"🔧 NAPRAWKA REZERWACJI dla {len(open_cc_list)} otwartych CC:")
+        
+        fixed_count = 0
+        
+        for cc_id, ticker, contracts in open_cc_list:
+            shares_needed = contracts * 100
+            
+            # Pobierz LOT-y dla tego tickera
+            cursor.execute("""
+                SELECT id, quantity_total, quantity_open
+                FROM lots 
+                WHERE ticker = ?
+                ORDER BY buy_date, id
+            """, (ticker,))
+            
+            lots = cursor.fetchall()
+            
+            if not lots:
+                print(f"   CC #{cc_id}: Brak LOT-ów dla {ticker}")
+                continue
+            
+            # Sprawdź ile może być zarezerwowane
+            total_quantity = sum([lot[1] for lot in lots])  # quantity_total
+            current_open = sum([lot[2] for lot in lots])    # quantity_open
+            already_reserved = total_quantity - current_open
+            
+            print(f"   CC #{cc_id} ({ticker}):")
+            print(f"     Potrzebuje: {shares_needed} akcji")
+            print(f"     Łącznie w LOT-ach: {total_quantity}")
+            print(f"     Aktualnie otwarte: {current_open}")
+            print(f"     Już zarezerwowane: {already_reserved}")
+            
+            # Jeśli już zarezerwowane wystarczająco, pomiń
+            if already_reserved >= shares_needed:
+                print(f"     ✅ Już prawidłowo zarezerwowane")
+                continue
+            
+            # Trzeba zarezerwować więcej
+            additional_needed = shares_needed - already_reserved
+            remaining_to_reserve = additional_needed
+            
+            for lot_id, qty_total, qty_open in lots:
+                if remaining_to_reserve <= 0:
+                    break
+                
+                qty_can_reserve = min(remaining_to_reserve, qty_open)
+                new_qty_open = qty_open - qty_can_reserve
+                
+                if qty_can_reserve > 0:
+                    cursor.execute("""
+                        UPDATE lots 
+                        SET quantity_open = ?
+                        WHERE id = ?
+                    """, (new_qty_open, lot_id))
+                    
+                    remaining_to_reserve -= qty_can_reserve
+                    print(f"     LOT #{lot_id}: {qty_open} -> {new_qty_open}")
+            
+            if remaining_to_reserve == 0:
+                fixed_count += 1
+                print(f"     ✅ Naprawiono CC #{cc_id}")
+            else:
+                print(f"     ❌ Nie udało się naprawić CC #{cc_id} - brakuje {remaining_to_reserve} akcji")
+        
+        conn.commit()
+        conn.close()
+        
+        return f"Naprawiono {fixed_count} z {len(open_cc_list)} CC"
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        return f"Błąd naprawki: {e}"
 
 def get_covered_calls_summary(ticker=None, status=None):
     """
@@ -1731,6 +1869,8 @@ def test_buyback_expiry_operations():
     
     return results
 
+# NAPRAWKA PUNKTU 61 - zamień funkcję check_cc_restrictions_before_sell w db.py
+
 def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
     """
     PUNKT 61: Sprawdza czy można sprzedać akcje bez naruszenia pokrycia otwartych CC
@@ -1743,9 +1883,9 @@ def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
         cursor = conn.cursor()
         ticker_upper = ticker.upper()
         
-        # Pobierz wszystkie dostępne akcje
+        # KROK 1: Pobierz wszystkie dostępne akcje (tak samo jak get_available_quantity)
         cursor.execute("""
-            SELECT SUM(quantity_open) as total_available
+            SELECT COALESCE(SUM(quantity_open), 0) as total_available
             FROM lots 
             WHERE ticker = ? AND quantity_open > 0
         """, (ticker_upper,))
@@ -1753,21 +1893,47 @@ def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
         result = cursor.fetchone()
         total_available = result[0] if result and result[0] else 0
         
-        # Pobierz otwarte CC dla tego tickera
+        # DEBUG: sprawdź co zwraca get_available_quantity dla porównania
+        available_via_get_function = get_available_quantity(ticker_upper)
+        
+        # KROK 2: Pobierz otwarte CC - NAPRAWIONE zapytanie
         cursor.execute("""
             SELECT id, contracts, strike_usd, expiry_date
             FROM options_cc 
-            WHERE ticker = ? AND status = 'open'
+            WHERE ticker = ? AND (status = 'open' OR close_date IS NULL)
         """, (ticker_upper,))
         
         open_cc_list = cursor.fetchall()
         
-        # Oblicz zarezerwowane akcje
+        # DEBUG: sprawdź ile CC znalazło
+        print(f"🔍 DEBUG PUNKT 61:")
+        print(f"   Ticker: {ticker_upper}")
+        print(f"   Total available (query): {total_available}")
+        print(f"   Available (get_function): {available_via_get_function}")
+        print(f"   Open CC found: {len(open_cc_list)}")
+        for cc in open_cc_list:
+            print(f"     CC #{cc[0]}: {cc[1]} contracts = {cc[1]*100} shares")
+        
+        # KROK 3: Oblicz zarezerwowane akcje
         reserved_for_cc = sum([cc[1] * 100 for cc in open_cc_list])  # contracts * 100
         available_to_sell = total_available - reserved_for_cc
         can_sell = quantity_to_sell <= available_to_sell
         
+        # KROK 4: Sprawdź czy są w ogóle jakieś CC w bazie
+        cursor.execute("SELECT COUNT(*) FROM options_cc WHERE ticker = ?", (ticker_upper,))
+        total_cc_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM options_cc")
+        all_cc_count = cursor.fetchone()[0]
+        
         conn.close()
+        
+        # DEBUG info
+        print(f"   Reserved for CC: {reserved_for_cc}")
+        print(f"   Available to sell: {available_to_sell}")
+        print(f"   Can sell {quantity_to_sell}? {can_sell}")
+        print(f"   Total CC for ticker: {total_cc_count}")
+        print(f"   Total CC in DB: {all_cc_count}")
         
         blocking_cc = [{'cc_id': cc[0], 'contracts': cc[1], 'shares_reserved': cc[1]*100, 
                        'strike_usd': cc[2], 'expiry_date': cc[3]} 
@@ -1779,12 +1945,377 @@ def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
             'reserved_for_cc': reserved_for_cc,
             'total_available': total_available,
             'blocking_cc': blocking_cc,
+            'debug_info': {
+                'get_available_quantity': available_via_get_function,
+                'total_cc_in_db': all_cc_count,
+                'cc_for_ticker': total_cc_count,
+                'open_cc_found': len(open_cc_list)
+            },
             'message': 'OK' if can_sell else f'Nie można sprzedać - zarezerwowane pod CC'
         }
         
     except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd check_cc_restrictions: {e}")
         return {'can_sell': False, 'message': f'Błąd: {str(e)}', 
-                'available_to_sell': 0, 'reserved_for_cc': 0, 'total_available': 0, 'blocking_cc': []}
+                'available_to_sell': 0, 'reserved_for_cc': 0, 'total_available': 0, 
+                'blocking_cc': [], 'debug_info': {}}
+
+# DODATKOWO: Dodaj funkcję diagnostyczną
+
+def debug_cc_restrictions(ticker):
+    """
+    Funkcja diagnostyczna do debugowania blokad CC
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return "Brak połączenia z bazą"
+        
+        cursor = conn.cursor()
+        ticker_upper = ticker.upper()
+        
+        print(f"\n🔍 DIAGNOSTYKA CC dla {ticker_upper}:")
+        
+        # 1. LOT-y
+        cursor.execute("""
+            SELECT id, quantity_total, quantity_open, buy_date
+            FROM lots 
+            WHERE ticker = ?
+            ORDER BY buy_date, id
+        """, (ticker_upper,))
+        lots = cursor.fetchall()
+        
+        print(f"📦 LOT-y ({len(lots)}):")
+        for lot in lots:
+            print(f"   LOT #{lot[0]}: {lot[2]}/{lot[1]} open (from {lot[3]})")
+        
+        total_open = sum([lot[2] for lot in lots])
+        print(f"   📊 SUMA quantity_open: {total_open}")
+        
+        # 2. Wszystkie CC
+        cursor.execute("""
+            SELECT id, contracts, status, open_date, expiry_date, close_date
+            FROM options_cc 
+            WHERE ticker = ?
+            ORDER BY open_date
+        """, (ticker_upper,))
+        all_cc = cursor.fetchall()
+        
+        print(f"🎯 WSZYSTKIE CC ({len(all_cc)}):")
+        for cc in all_cc:
+            shares = cc[1] * 100
+            print(f"   CC #{cc[0]}: {cc[1]} contracts = {shares} shares, status='{cc[2]}', close_date={cc[5]}")
+        
+        # 3. Otwarte CC
+        open_cc = [cc for cc in all_cc if cc[2] == 'open' or cc[5] is None]
+        print(f"🔓 OTWARTE CC ({len(open_cc)}):")
+        total_reserved = 0
+        for cc in open_cc:
+            shares = cc[1] * 100
+            total_reserved += shares
+            print(f"   CC #{cc[0]}: {shares} shares reserved")
+        
+        print(f"   📊 SUMA reserved: {total_reserved}")
+        
+        # 4. Wynik
+        available = total_open - total_reserved
+        print(f"✅ DOSTĘPNE DO SPRZEDAŻY: {available} ({total_open} - {total_reserved})")
+        
+        conn.close()
+        return f"OK - szczegóły w konsoli"
+        
+    except Exception as e:
+        return f"Błąd diagnostyki: {e}"
+
+# PUNKT 62: NAPRAWIONE FUNKCJE w db.py
+# ZAMIEŃ na końcu db.py te funkcje:
+
+def get_total_quantity(ticker):
+    """Pobiera łączną ilość posiadanych akcji dla tickera (włącznie z zarezerwowanymi)"""
+    conn = get_connection()  # ✅ NAPRAWIONE
+    if not conn:
+        return 0
+        
+    cursor = conn.cursor()
+    
+    query = """
+    SELECT COALESCE(SUM(quantity_open), 0) as total_open
+    FROM lots 
+    WHERE ticker = ? AND quantity_open > 0
+    """
+    
+    cursor.execute(query, (ticker,))
+    result = cursor.fetchone()
+    conn.close()
+    
+    return result[0] if result else 0  # ✅ NAPRAWIONE - result[0] zamiast result['total_open']
+
+def get_all_tickers():
+    """Pobiera listę wszystkich tickerów z akcjami w portfelu"""
+    conn = get_connection()  # ✅ NAPRAWIONE
+    if not conn:
+        return []
+        
+    cursor = conn.cursor()
+    
+    query = """
+    SELECT DISTINCT ticker 
+    FROM lots 
+    WHERE quantity_open > 0
+    ORDER BY ticker
+    """
+    
+    cursor.execute(query)
+    results = cursor.fetchall()
+    conn.close()
+    
+    return [row[0] for row in results]  # ✅ NAPRAWIONE - row[0] zamiast row['ticker']
+
+def get_open_cc_for_ticker(ticker):
+    """Pobiera listę otwartych Covered Calls dla danego tickera"""
+    conn = get_connection()  # ✅ NAPRAWIONE
+    if not conn:
+        return []
+        
+    cursor = conn.cursor()
+    
+    query = """
+    SELECT id, contracts, strike_usd, expiry_date, premium_sell_usd,
+           (contracts * 100) as shares_reserved
+    FROM options_cc 
+    WHERE ticker = ? AND status = 'open'
+    ORDER BY expiry_date ASC
+    """
+    
+    cursor.execute(query, (ticker,))
+    results = cursor.fetchall()
+    conn.close()
+    
+    # Konwertuj na listę dict
+    cc_list = []
+    for row in results:
+        cc_list.append({
+            'cc_id': row[0],
+            'contracts': row[1], 
+            'strike_usd': row[2],
+            'expiry_date': row[3],
+            'premium_usd': row[4],
+            'shares_reserved': row[5]
+        })
+    
+    return cc_list
+
+def get_portfolio_summary():
+    """Pobiera podsumowanie całego portfela dla dashboard"""
+    conn = get_connection()  # ✅ NAPRAWIONE
+    if not conn:
+        return {}
+        
+    cursor = conn.cursor()
+    
+    try:
+        # Akcje
+        stocks_query = """
+        SELECT ticker, 
+               SUM(quantity_open) as total_shares,
+               SUM(quantity_open * buy_price_usd) as total_cost_usd
+        FROM lots 
+        WHERE quantity_open > 0
+        GROUP BY ticker
+        """
+        
+        cursor.execute(stocks_query)
+        stocks = cursor.fetchall()
+        
+        # Otwarte CC
+        cc_query = """
+        SELECT ticker, 
+               COUNT(*) as open_cc_count,
+               SUM(contracts) as total_contracts,
+               SUM(contracts * 100) as total_shares_reserved
+        FROM options_cc 
+        WHERE status = 'open'
+        GROUP BY ticker
+        """
+        
+        cursor.execute(cc_query)
+        cc_data = cursor.fetchall()
+        conn.close()
+        
+        # Połącz dane
+        portfolio = {}
+        
+        # Dodaj akcje
+        for stock in stocks:
+            portfolio[stock[0]] = {  # stock[0] = ticker
+                'total_shares': stock[1],  # stock[1] = total_shares
+                'cost_usd': stock[2],     # stock[2] = total_cost_usd
+                'cc_count': 0,
+                'shares_reserved': 0,
+                'shares_available': stock[1]  # początkowo wszystkie dostępne
+            }
+        
+        # Dodaj dane CC
+        for cc in cc_data:
+            ticker = cc[0]  # cc[0] = ticker
+            if ticker in portfolio:
+                portfolio[ticker]['cc_count'] = cc[1]      # cc[1] = open_cc_count
+                portfolio[ticker]['shares_reserved'] = cc[3] # cc[3] = total_shares_reserved
+                portfolio[ticker]['shares_available'] = portfolio[ticker]['total_shares'] - cc[3]
+        
+        return portfolio
+        
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd portfolio summary: {e}")
+        if conn:
+            conn.close()
+        return {}
+
+def get_cc_expiry_alerts(days_ahead=7):
+    """Pobiera Covered Calls wygasające w najbliższych N dni"""
+    conn = get_connection()  # ✅ NAPRAWIONE
+    if not conn:
+        return []
+        
+    cursor = conn.cursor()
+    
+    try:
+        from datetime import datetime, timedelta
+        alert_date = (datetime.now() + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+        
+        query = """
+        SELECT id, ticker, contracts, strike_usd, expiry_date,
+               (julianday(expiry_date) - julianday('now')) as days_to_expiry
+        FROM options_cc 
+        WHERE status = 'open'
+        AND expiry_date <= ?
+        ORDER BY expiry_date ASC
+        """
+        
+        cursor.execute(query, (alert_date,))
+        results = cursor.fetchall()
+        conn.close()
+        
+        # Konwertuj na listę dict
+        alerts = []
+        for row in results:
+            alerts.append({
+                'cc_id': row[0],
+                'ticker': row[1],
+                'contracts': row[2],
+                'strike_usd': row[3],
+                'expiry_date': row[4],
+                'days_to_expiry': int(row[5]) if row[5] else 0
+            })
+        
+        return alerts
+        
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd CC expiry alerts: {e}")
+        if conn:
+            conn.close()
+        return []
+        
+def reset_ticker_reservations(ticker):
+    """
+    FUNKCJA NAPRAWCZA: Resetuje rezerwacje dla konkretnego tickera
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return "Brak połączenia z bazą"
+        
+        cursor = conn.cursor()
+        ticker_upper = ticker.upper()
+        
+        print(f"🔄 RESET REZERWACJI dla {ticker_upper}:")
+        
+        # 1. Zresetuj wszystkie quantity_open do quantity_total dla tego tickera
+        cursor.execute("""
+            UPDATE lots 
+            SET quantity_open = quantity_total
+            WHERE ticker = ?
+        """, (ticker_upper,))
+        
+        reset_count = cursor.rowcount
+        print(f"   📦 Zresetowano {reset_count} LOT-ów")
+        
+        # 2. Pobierz otwarte CC dla tego tickera
+        cursor.execute("""
+            SELECT id, contracts
+            FROM options_cc 
+            WHERE ticker = ? AND status = 'open'
+            ORDER BY id
+        """, (ticker_upper,))
+        
+        open_cc = cursor.fetchall()
+        print(f"   🎯 Znaleziono {len(open_cc)} otwartych CC")
+        
+        # 3. Ponownie zarezerwuj akcje dla każdego CC
+        for cc_id, contracts in open_cc:
+            shares_needed = contracts * 100
+            remaining_to_reserve = shares_needed
+            
+            print(f"   CC #{cc_id}: rezerwacja {shares_needed} akcji")
+            
+            # Pobierz dostępne LOT-y FIFO
+            cursor.execute("""
+                SELECT id, quantity_open
+                FROM lots 
+                WHERE ticker = ? AND quantity_open > 0
+                ORDER BY buy_date, id
+            """, (ticker_upper,))
+            
+            available_lots = cursor.fetchall()
+            
+            for lot_id, qty_open in available_lots:
+                if remaining_to_reserve <= 0:
+                    break
+                
+                qty_to_reserve = min(remaining_to_reserve, qty_open)
+                new_qty_open = qty_open - qty_to_reserve
+                
+                cursor.execute("""
+                    UPDATE lots 
+                    SET quantity_open = ?
+                    WHERE id = ?
+                """, (new_qty_open, lot_id))
+                
+                remaining_to_reserve -= qty_to_reserve
+                print(f"     LOT #{lot_id}: {qty_open} -> {new_qty_open}")
+            
+            if remaining_to_reserve > 0:
+                print(f"     ❌ BRAKUJE {remaining_to_reserve} akcji dla CC #{cc_id}")
+            else:
+                print(f"     ✅ CC #{cc_id} prawidłowo zarezerwowane")
+        
+        # 4. Sprawdź finalne stany
+        cursor.execute("""
+            SELECT SUM(quantity_total) as total, SUM(quantity_open) as open
+            FROM lots 
+            WHERE ticker = ?
+        """, (ticker_upper,))
+        
+        final_stats = cursor.fetchone()
+        total_shares, open_shares = final_stats
+        reserved_shares = total_shares - open_shares
+        
+        print(f"   📊 FINAL: {open_shares}/{total_shares} dostępne (zarezerwowane: {reserved_shares})")
+        
+        conn.commit()
+        conn.close()
+        
+        return f"Reset {ticker_upper}: {open_shares}/{total_shares} dostępne, {reserved_shares} zarezerwowane"
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        print(f"❌ Błąd resetu: {e}")
+        return f"Błąd: {e}"
 
 # Test na końcu pliku (opcjonalny)
 if __name__ == "__main__":

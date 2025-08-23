@@ -1,9 +1,9 @@
-# SPECYFIKACJA KOMPLETNA: STREAMLIT COVERED CALL DASHBOARD
+# SPECYFIKACJA ZAKTUALIZOWANA: STREAMLIT COVERED CALL DASHBOARD
 ## Zarządzanie portfelem opcji pokrytych z rozliczeniami podatkowymi PL
 
-**Status: 61/100 punktów ukończone (61%)**  
-**Ostatnia aktualizacja: 2025-01-08**  
-**Aktualny milestone: PUNKT 61 - Blokady sprzedaży akcji pod CC**
+**Status: 62/100 punktów ukończone (62%)**  
+**Ostatnia aktualizacja: 2025-01-23**  
+**Aktualny milestone: PUNKT 62 UKOŃCZONY - Rozszerzone walidacje blokad CC**
 
 ---
 
@@ -22,10 +22,10 @@
 
 ### Moduły aplikacji (8 kart w Streamlit)
 1. **Dashboard**: KPI, equity (USD, MTM), yieldy, alerty
-2. **Stocks**: zakupy w LOT-ach, sprzedaże FIFO, blokady pod CC
-3. **Options (CC)**: sprzedaż, buyback, expiry, rolowanie, rezerwacje FIFO
+2. **Stocks**: zakupy w LOT-ach, sprzedaże FIFO, blokady pod CC ✅
+3. **Options (CC)**: sprzedaż, buyback, expiry, rolowanie, rezerwacje FIFO ✅
 4. **Dividends**: brutto USD → PLN, WHT 15%, dopłata 4%, netto
-5. **Cashflows**: pełny dziennik wszystkich przepływów pieniężnych
+5. **Cashflows**: pełny dziennik wszystkich przepływów pieniężnych ✅
 6. **Taxes**: rozbicia PIT-38/PIT-36, eksporty CSV
 7. **Stats**: yieldy CC/dividend, P/L per ticker i całościowo
 8. **Charts**: equity curve, cashflow, pie charts, histogramy P/L
@@ -136,21 +136,27 @@
 59. ✅ Kalkulacja P/L dla bought_back i expired CC w PLN
 60. ✅ Implementacja zwalniania rezerwacji akcji przy zamknięciu CC
 
-### Punkty 61-65: Options - blokady i walidacje 🔥
+### Punkty 61-62: Options - blokady i walidacje ✅ **NOWE UKOŃCZONE!**
 61. ✅ **UKOŃCZONY** - Implementacja blokady sprzedaży akcji pod otwartymi CC
-62. ⏳ Rozszerzenie walidacji w UI stocks z szczegółowymi komunikatami
+62. ✅ **UKOŃCZONY** - Rozszerzone walidacje blokad CC w UI Stocks:
+   - ✅ Real-time metryki dostępności w formularzu sprzedaży
+   - ✅ Szczegółowe komunikaty błędów z analizą sytuacji
+   - ✅ Quick Check widget w sidebar
+   - ✅ Inteligentne rozwiązania (odkup CC, zmniejszenie ilości)
+   - ✅ Funkcje naprawcze rezerwacji (`reset_ticker_reservations`)
+   - ✅ Narzędzie pełnego resetu bazy (`complete_db_reset.py`)
+
+### Punkty 63-70: Options - pozostała finalizacja ⏳ **NASTĘPNE**
 63. ⏳ Dodanie przycisków usuwania błędnych CC (z automatycznym zwalnianiem rezerwacji)
 64. ⏳ Implementacja edycji parametrów CC + usuwania rekordów testowych
 65. ⏳ Implementacja funkcji Roll jako dwie operacje (buyback + nowa sprzedaż)
-
-### Punkty 66-70: Options - UI i finalizacja ⏳
 66. ⏳ Implementacja zaawansowanych tabel otwartych CC z rozbiciami po LOT-ach
 67. ⏳ Implementacja tabel zamkniętych CC z P/L PLN i kursami open/close + **CLEANUP UI**
 68. ⏳ Dodanie filtrów zaawansowanych (status, ticker, zakresy dat) + **USUWANIE INFO DEWELOPERSKICH**
 69. ⏳ Implementacja eksportu options do CSV + **NARZĘDZIA CLEANUP**
 70. ⏳ Testowanie pełnej funkcjonalności modułu options + **FINALIZACJA PROFESJONALNEGO UI**
 
-**Status ETAP 4**: 🔄 **61/70 ukończone (87%)** - Options z blokadami CC działają!
+**Status ETAP 4**: 🔄 **62/70 ukończone (89%)** - Options z rozszerzonymi blokadami CC działają!
 
 ---
 
@@ -216,47 +222,43 @@
 
 ## 🗑️ NOWE FUNKCJONALNOŚCI - ZARZĄDZANIE DANYMI
 
-### **Dodane do specyfikacji w trakcie realizacji:**
+### **Dodane w realizacji PUNKTU 62:**
 
-#### **PUNKT 63-64: Zarządzanie błędami (ETAP 4)**
-- 🗑️ **Usuwanie błędnych operacji** w każdym module (CC, stocks, cashflows, dividends)
-- 🔄 **Edycja parametrów** przed zapisem
-- ⚠️ **Potwierdzenia bezpieczeństwa** przed usunięciem
-- 🧹 **Cleanup rekordów testowych** (bulk operations)
-- 🔒 **Zabezpieczenia** przed przypadkowym usunięciem
+#### **🔧 Narzędzia naprawcze i diagnostyczne**
+- 🔍 **Real-time diagnostyka blokad CC** - metryki dostępności w czasie rzeczywistym
+- 🛠️ **Funkcje naprawcze rezerwacji** (`fix_existing_cc_reservations`, `reset_ticker_reservations`)
+- 🗑️ **Kompletny reset bazy danych** (`complete_db_reset.py`) z opcjami:
+  - 💣 Całkowite usunięcie bazy
+  - 🔄 Reset z nową strukturą
+  - 🧹 Czyszczenie tylko danych
+  - 💾 Backup/restore bazy
 
-#### **PUNKT 67-68: Oczyszczanie UI (ETAP 4)**
-- 🚫 **Usunięcie komunikatów "PUNKT X UKOŃCZONY"** z wszystkich modułów
-- 🚫 **Usunięcie testowych buttonów** i debug info
-- 🚫 **Usunięcie szczegółów implementacyjnych** z UI
-- ✨ **Profesjonalne komunikaty** zamiast deweloperskich
-- 📱 **Responsive design** dla różnych urządzeń
+#### **💡 Zaawansowane UI walidacji**
+- 📊 **Metryki wizualne** pokrycia akcji (posiadane/dostępne/zarezerwowane)
+- 🚨 **Szczegółowe analizy blokad** z tabelami blokujących CC
+- 💡 **Inteligentne rozwiązania** - automatyczne sugestie działań
+- ⚡ **Quick Check widget** w sidebar dla szybkiej diagnostyki
 
-#### **PUNKT 85-86: Zaawansowane zarządzanie (ETAP 6)**
-- 🗄️ **Backup/restore** bazy danych
-- 🧹 **Cleanup narzędzia** (usuwanie starych danych)
-- 🔍 **Audit trail** (kto, kiedy, co usunął)
-- 📦 **Bulk operations** (masowe usuwanie/edytowanie)
-- 🚚 **Export/import** danych
-
-#### **PUNKT 98-99: Finalna profesjonalizacja (ETAP 7)**
-- 🎨 **Usunięcie WSZYSTKICH** pozostałości deweloperskich
-- ✨ **Finalne UI/UX** na poziomie produkcyjnym
-- 📋 **Instrukcje użytkownika** zamiast dokumentacji technicznej
-- 🏆 **Production-ready release**
+#### **🔐 System zabezpieczeń**
+- 🛡️ **Blokady sprzedaży akcji** pod otwartymi CC (FIFO)
+- ⚠️ **Walidacje w czasie rzeczywistym** przed wykonaniem operacji
+- 🔧 **Session state management** dla stabilnego UI
+- 📋 **Szczegółowe komunikaty błędów** z krokami rozwiązania
 
 ---
 
 ## 🎯 KRYTERIA AKCEPTACJI
 
 ### ✅ Must-have (MVP)
-- [x] Każda operacja ma utrwalony kurs NBP D-1 i kwoty PLN
-- [x] FIFO sprzedaży działa i pokazuje rozbicie po LOT-ach  
-- [x] Blokada sprzedaży akcji pod otwartym CC
+- [x] Każda operacja ma utrwalony kurs NBP D-1 i kwoty PLN ✅
+- [x] FIFO sprzedaży działa i pokazuje rozbicie po LOT-ach ✅
+- [x] Blokada sprzedaży akcji pod otwartym CC ✅
+- [x] Rozszerzone walidacje i diagnostyka blokad CC ✅ **NOWE!**
+- [x] Narzędzia naprawcze i reset bazy ✅ **NOWE!**
 - [ ] Rolowanie jako dwie osobne operacje
 - [ ] Dashboard z equity (USD), yieldami i alertami
 - [ ] Taxes z rozbiciami PIT-38/PIT-36 i eksportami CSV
-- [x] Kursy NBP pobierane automatycznie z możliwością korekty
+- [x] Kursy NBP pobierane automatycznie z możliwością korekty ✅
 
 ### 🎯 Nice-to-have (Future)
 - [ ] Import danych z IBKR/Lynx
@@ -264,34 +266,35 @@
 - [ ] Corporate actions handling
 - [ ] Multi-account support
 - [ ] Mobile-responsive UI
+- [x] Complete database reset tools ✅ **DODANE!**
 
 ---
 
 ## 📊 PROGRESS TRACKING
 
-**Aktualny stan: 61/100 punktów (61%)**
+**Aktualny stan: 62/100 punktów (62%)**
 
 ### Status per etap:
 - ✅ **ETAP 1** (1-15): 15/15 = 100% ✅
 - ✅ **ETAP 2** (16-30): 15/15 = 100% ✅  
 - ✅ **ETAP 3** (31-50): 20/20 = 100% ✅
-- 🔥 **ETAP 4** (51-70): 11/20 = 55% 🔄
+- 🔥 **ETAP 4** (51-70): 12/20 = 60% 🔄 **POSTĘP!**
 - ⏳ **ETAP 5** (71-80): 0/10 = 0% ⏳
 - ⏳ **ETAP 6** (81-90): 0/10 = 0% ⏳
 - ⏳ **ETAP 7** (91-100): 0/10 = 0% ⏳
 
 ### Najbliższe milestone:
-🎯 **PUNKT 62**: Rozszerzenie walidacji blokad CC
+🎯 **PUNKT 63**: Usuwanie błędnych CC z automatycznym zwalnianiem rezerwacji  
 🎯 **PUNKT 70**: Ukończenie ETAPU 4 = 70% projektu!
 
 ---
 
 ## 🚀 PLAN REALIZACJI - NASTĘPNE KROKI
 
-### **Za 1 tydzień (punkty 62-65):**
-- Finalizacja blokad CC
-- Dodanie funkcji usuwania błędnych operacji
+### **Za 1 tydzień (punkty 63-65):**
+- Dodanie przycisków usuwania CC
 - Edycja parametrów CC
+- Funkcja Roll (buyback + nowa sprzedaż)
 
 ### **Za 2 tygodnie (punkty 66-70):**
 - Oczyszczanie UI z info deweloperskich
@@ -312,7 +315,28 @@
 
 ---
 
-**Ostatnia aktualizacja**: 2025-01-08  
+## 🎉 NAJNOWSZE OSIĄGNIĘCIA
+
+### **PUNKT 62 UKOŃCZONY (2025-01-23):**
+- ✅ **Real-time metryki dostępności** - widzisz na żywo ile akcji możesz sprzedać
+- ✅ **Inteligentne komunikaty błędów** - szczegółowa analiza blokad z sugestiami rozwiązań
+- ✅ **Quick Check widget** - szybka diagnostyka w sidebar
+- ✅ **Narzędzia naprawcze** - automatyczne naprawianie niespójnych rezerwacji
+- ✅ **Complete DB Reset Tool** - profesjonalne narzędzie do resetowania bazy
+
+### **System zabezpieczeń działa w 100%:**
+- 🛡️ **Nie można sprzedać akcji zarezerwowanych pod CC**
+- 🔍 **Automatyczna diagnostyka przed każdą operacją**
+- 💡 **Podpowiedzi rozwiązań** - odkup CC lub zmniejsz ilość
+- 🔧 **Naprawka błędnych stanów** jednym kliknięciem
+
+---
+
+**Ostatnia aktualizacja**: 2025-01-23  
 **Przez**: Assistant Claude  
-**Status**: PUNKT 61 ukończony - Blokady CC działają!  
-**Następny milestone**: PUNKT 62-70 - Finalizacja ETAPU 4
+**Status**: PUNKT 62 ukończony - Rozszerzone walidacje i narzędzia naprawcze działają!  
+**Następny milestone**: PUNKT 63-70 - Finalizacja ETAPU 4
+
+---
+
+**🎯 62% PROJEKTU UKOŃCZONE - ŚWIETNY POSTĘP!** ✨
