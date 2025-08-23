@@ -30,73 +30,41 @@ except ImportError as e:
     st.error(f"Błąd importu modułów: {e}")
 
 def show_options():
-    """Główna funkcja modułu Options"""
+    """Główna funkcja modułu Options - PUNKT 67: CLEANUP UI"""
     
     st.header("🎯 Options - Covered Calls")
-    st.markdown("*ETAP 4: Profesjonalne zarządzanie opcjami pokrytymi z rezerwacjami FIFO*")
+    st.markdown("*Profesjonalne zarządzanie opcjami pokrytymi z rezerwacjami FIFO*")
     
-    # Status ETAPU 4
-    st.success("🚀 **PUNKTY 51-56 UKOŃCZONE** - Sprzedaż, buyback i expiry CC!")
+    # CLEANUP: Usunięto deweloperskie komunikaty success
+    # st.success("🚀 **PUNKTY 51-56 UKOŃCZONE** - Sprzedaż, buyback i expiry CC!")
     
-    # Sprawdzenie gotowości do ETAPU 4
-    st.markdown("### 🔍 Status systemu Options")
-    
+    # Status systemu (uproszczony)
     try:
-        # Test 1: Dostępność akcji w portfelu
         lots_stats = db.get_lots_stats()
+        cc_stats = db.get_cc_reservations_summary()
         
-        col_check1, col_check2, col_check3 = st.columns(3)
+        col_status1, col_status2 = st.columns(2)
         
-        with col_check1:
+        with col_status1:
             if lots_stats['open_shares'] > 0:
-                st.success(f"✅ **Akcje dostępne**: {lots_stats['open_shares']} szt.")
-                shares_ready = True
+                st.success(f"✅ **{lots_stats['open_shares']} akcji dostępnych**")
             else:
                 st.error("❌ **Brak akcji** - dodaj LOT-y w module Stocks")
-                shares_ready = False
         
-        with col_check2:
-            # Test NBP API
-            try:
-                test_rate = nbp_api_client.get_usd_rate_for_date(date.today())
-                if test_rate:
-                    st.success("✅ **NBP API**: Działający")
-                    nbp_ready = True
-                else:
-                    st.warning("⚠️ **NBP API**: Problem")
-                    nbp_ready = False
-            except:
-                st.error("❌ **NBP API**: Błąd")
-                nbp_ready = False
+        with col_status2:
+            open_cc_count = cc_stats.get('open_cc_count', 0)
+            if open_cc_count > 0:
+                st.info(f"🎯 **{open_cc_count} otwartych CC**")
+            else:
+                st.info("📝 **Brak otwartych CC**")
         
-        with col_check3:
-            # Test tabeli options_cc
-            try:
-                cc_stats = db.get_cc_reservations_summary()
-                st.success(f"✅ **CC aktywne**: {cc_stats.get('open_cc_count', 0)}")
-                table_ready = True
-            except Exception as e:
-                st.error(f"❌ **Tabela CC**: {e}")
-                table_ready = False
-        
-        # Podsumowanie gotowości
-        readiness_score = sum([shares_ready, nbp_ready, table_ready])
-        
-        if readiness_score == 3:
-            st.success("🎉 **SYSTEM DZIAŁA PERFEKCYJNIE!**")
-        elif readiness_score >= 2:
-            st.warning("⚠️ **System częściowo gotowy** - można kontynuować")
-        else:
-            st.error("❌ **System wymaga uwagi**")
-            
     except Exception as e:
-        st.error(f"❌ Błąd sprawdzania gotowości: {e}")
+        st.error(f"❌ Błąd systemu: {e}")
     
-    # Zakładki modułu Options
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # CLEANUP: Zakładki bez zmian (już zrobione w punkcie 65)
+    tab1, tab2, tab3, tab4 = st.tabs([
         "🎯 Sprzedaż CC", 
         "💰 Buyback & Expiry", 
-        "🔄 Rolowanie", 
         "📊 Otwarte CC", 
         "📋 Historia CC"
     ])
@@ -108,13 +76,10 @@ def show_options():
         show_buyback_expiry_tab()
     
     with tab3:
-        show_rolling_tab()
-    
-    with tab4:
         show_open_cc_tab()
     
-    with tab5:
-        show_cc_history_tab()
+    with tab4:
+        show_cc_history_tab()  # Nowa wersja z PUNKT 67
 
 def show_sell_cc_tab():
     """Tab sprzedaży Covered Calls - PUNKTY 53-54: Kompletny formularz"""
@@ -673,559 +638,497 @@ def show_buyback_expiry_tab():
     st.success("✅ **PUNKT 56 UKOŃCZONY** - Funkcje buyback i expiry z kalkulacją P/L PLN!")
     st.info("🔄 **NASTĘPNY KROK**: PUNKT 57-58 - Finalizacja buyback/expiry")
 
-def show_rolling_tab():
-    """Tab rolowania opcji"""
-    st.subheader("🔄 Rolowanie opcji")
-    st.info("**PUNKT 65**: Roll jako dwie operacje (buyback + nowa sprzedaż)")
-    
-    st.markdown("""
-    **🎯 FUNKCJONALNOŚĆ ROLOWANIA:**
-    - ⏳ Kombinacja buyback starej CC + sprzedaż nowej CC
-    - ⏳ Automatyczne przeniesienie rezerwacji akcji
-    - ⏳ Kalkulacja net credit/debit operacji
-    - ⏳ Zapis jako dwie osobne operacje w bazie
-    """)
+
+def get_portfolio_cc_summary():
+    """
+    PUNKT 66: Podsumowanie całego portfela CC
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {}
+        
+        cursor = conn.cursor()
+        
+        # Podstawowe statystyki
+        cursor.execute("SELECT COUNT(*) FROM options_cc WHERE status = 'open'")
+        open_cc_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM options_cc WHERE status != 'open'")
+        closed_cc_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT SUM(contracts) FROM options_cc WHERE status = 'open'")
+        total_open_contracts = cursor.fetchone()[0] or 0
+        
+        cursor.execute("SELECT SUM(premium_sell_pln) FROM options_cc WHERE status = 'open'")
+        total_open_premium_pln = cursor.fetchone()[0] or 0
+        
+        cursor.execute("SELECT SUM(pl_pln) FROM options_cc WHERE status != 'open' AND pl_pln IS NOT NULL")
+        total_realized_pl_pln = cursor.fetchone()[0] or 0
+        
+        # Statystyki per ticker
+        cursor.execute("""
+            SELECT ticker, 
+                   COUNT(*) as cc_count,
+                   SUM(contracts) as total_contracts,
+                   SUM(premium_sell_pln) as total_premium_pln
+            FROM options_cc 
+            WHERE status = 'open'
+            GROUP BY ticker
+            ORDER BY ticker
+        """)
+        
+        ticker_stats = []
+        for row in cursor.fetchall():
+            ticker_stats.append({
+                'ticker': row[0],
+                'cc_count': row[1],
+                'total_contracts': row[2],
+                'shares_reserved': row[2] * 100,
+                'total_premium_pln': row[3]
+            })
+        
+        conn.close()
+        
+        return {
+            'open_cc_count': open_cc_count,
+            'closed_cc_count': closed_cc_count,
+            'total_open_contracts': total_open_contracts,
+            'total_shares_reserved': total_open_contracts * 100,
+            'total_open_premium_pln': total_open_premium_pln,
+            'total_realized_pl_pln': total_realized_pl_pln,
+            'ticker_stats': ticker_stats
+        }
+        
+    except Exception as e:
+        print(f"Błąd get_portfolio_cc_summary: {e}")
+        return {}
+
+
+# PUNKT 66: Ulepszona funkcja show_open_cc_tab() w modules/options.py
 
 def show_open_cc_tab():
-    """Tab otwartych pozycji CC - PUNKT 55: Pokazanie faktycznych danych"""
+    """
+    PUNKT 66: Zaawansowana tabela otwartych CC z rozbiciami FIFO
+    """
     st.subheader("📊 Otwarte pozycje CC")
-    st.success("✅ **PUNKT 55 UKOŃCZONY** - Finalizacja sprzedaży CC z alertami expiry")
+    st.success("✅ **PUNKT 66 UKOŃCZONY** - Zaawansowane tabele z pokryciem FIFO")
     
-    # Pobierz otwarte CC z bazy
-    try:
-        open_cc_list = db.get_covered_calls_summary(status='open')
-        
-        if not open_cc_list:
-            st.info("💡 **Brak otwartych pozycji CC**")
-            st.markdown("*Sprzedaj pierwszą opcję w zakładce 'Sprzedaż CC'*")
-            return
-        
-        st.write(f"🎯 **Otwarte pozycje CC**: {len(open_cc_list)}")
-        
-        # Sprawdź alerty expiry ≤ 3 dni
-        today = date.today()
-        alert_threshold = today + timedelta(days=3)
-        
-        expiry_alerts = []
-        for cc in open_cc_list:
-            expiry_date = cc['expiry_date']
-            if isinstance(expiry_date, str):
-                expiry_date = datetime.strptime(expiry_date, '%Y-%m-%d').date()
-            
-            if expiry_date <= alert_threshold:
-                days_left = (expiry_date - today).days
-                expiry_alerts.append({
-                    'cc': cc,
-                    'days_left': days_left,
-                    'expiry_date': expiry_date
-                })
-        
-        # ALERTY EXPIRY
-        if expiry_alerts:
-            st.markdown("### 🚨 Alerty Expiry ≤ 3 dni")
-            
-            for alert in expiry_alerts:
-                cc = alert['cc']
-                days_left = alert['days_left']
-                
-                if days_left <= 0:
-                    alert_type = "🔴 **EXPIRED**"
-                    alert_color = "error"
-                elif days_left <= 1:
-                    alert_type = "🟠 **1 DZIEŃ**"
-                    alert_color = "warning"
-                else:
-                    alert_type = f"🟡 **{days_left} DNI**"
-                    alert_color = "warning"
-                
-                with st.container():
-                    if alert_color == "error":
-                        st.error(f"{alert_type} - CC #{cc['id']} {cc['ticker']} ${cc['strike_usd']:.2f} exp {alert['expiry_date']}")
-                    else:
-                        st.warning(f"{alert_type} - CC #{cc['id']} {cc['ticker']} ${cc['strike_usd']:.2f} exp {alert['expiry_date']}")
-        
-        # TABELA OTWARTYCH CC
-        st.markdown("### 📋 Wszystkie otwarte pozycje")
-        
-        # Przygotuj dane do tabeli
-        table_data = []
-        total_premium_pln = 0
-        total_contracts = 0
-        
-        for cc in open_cc_list:
-            # Oblicz dni do expiry
-            expiry_date = cc['expiry_date']
-            if isinstance(expiry_date, str):
-                expiry_date_obj = datetime.strptime(expiry_date, '%Y-%m-%d').date()
-            else:
-                expiry_date_obj = expiry_date
-            
-            days_to_expiry = (expiry_date_obj - today).days
-            
-            # Status expiry
-            if days_to_expiry <= 0:
-                expiry_status = "🔴 EXPIRED"
-            elif days_to_expiry <= 3:
-                expiry_status = f"🟠 {days_to_expiry}d"
-            elif days_to_expiry <= 7:
-                expiry_status = f"🟡 {days_to_expiry}d"
-            else:
-                expiry_status = f"🟢 {days_to_expiry}d"
-            
-            table_data.append({
-                'ID': cc['id'],
-                'Ticker': cc['ticker'],
-                'Kontrakty': cc['contracts'],
-                'Strike': f"${cc['strike_usd']:.2f}",
-                'Premium/akcja': f"${cc['premium_sell_usd']:.2f}",
-                'Premium PLN': f"{cc['premium_sell_pln']:.2f} zł",
-                'Open Date': cc['open_date'],
-                'Expiry': cc['expiry_date'],
-                'Status Expiry': expiry_status,
-                'Kurs Open': f"{cc['fx_open']:.4f}"
-            })
-            
-            total_premium_pln += cc['premium_sell_pln']
-            total_contracts += cc['contracts']
-        
-        # Wyświetl tabelę
-        df_open_cc = pd.DataFrame(table_data)
-        
-        st.dataframe(
-            df_open_cc,
-            use_container_width=True,
-            height=400,
-            column_config={
-                'ID': st.column_config.NumberColumn('ID', width=60),
-                'Ticker': st.column_config.TextColumn('Ticker', width=80),
-                'Kontrakty': st.column_config.NumberColumn('Kontrakty', width=80),
-                'Strike': st.column_config.TextColumn('Strike', width=90),
-                'Premium/akcja': st.column_config.TextColumn('Premium/akcja', width=100),
-                'Premium PLN': st.column_config.TextColumn('Premium PLN', width=120),
-                'Open Date': st.column_config.DateColumn('Open Date', width=110),
-                'Expiry': st.column_config.DateColumn('Expiry', width=110),
-                'Status Expiry': st.column_config.TextColumn('Status Expiry', width=100),
-                'Kurs Open': st.column_config.TextColumn('Kurs Open', width=90)
-            }
+    # Podsumowanie portfela
+    portfolio_summary = db.get_portfolio_cc_summary()
+    
+    if portfolio_summary['open_cc_count'] == 0:
+        st.info("💡 **Brak otwartych pozycji CC**")
+        st.markdown("*Sprzedaj pierwszą opcję w zakładce 'Sprzedaż CC'*")
+        return
+    
+    # METRICS OVERVIEW
+    st.markdown("### 📈 Podsumowanie portfela CC")
+    
+    col_metric1, col_metric2, col_metric3, col_metric4 = st.columns(4)
+    
+    with col_metric1:
+        st.metric(
+            "🎯 Otwarte CC",
+            f"{portfolio_summary['open_cc_count']}",
+            help="Liczba otwartych pozycji"
         )
+    
+    with col_metric2:
+        st.metric(
+            "📦 Kontrakty",
+            f"{portfolio_summary['total_open_contracts']}",
+            help="Suma wszystkich kontraktów"
+        )
+    
+    with col_metric3:
+        st.metric(
+            "🔒 Akcje zarezerwowane",
+            f"{portfolio_summary['total_shares_reserved']}",
+            help="Akcje pod pokryciem CC"
+        )
+    
+    with col_metric4:
+        st.metric(
+            "💰 Premium PLN",
+            f"{portfolio_summary['total_open_premium_pln']:,.0f} zł",
+            help="Łączna otrzymana premium"
+        )
+    
+    # BREAKDOWN PER TICKER
+    if portfolio_summary['ticker_stats']:
+        st.markdown("### 📊 Rozkład per ticker")
         
-        # PODSUMOWANIE
-        st.markdown("### 📊 Podsumowanie otwartych CC")
+        ticker_data = []
+        for stat in portfolio_summary['ticker_stats']:
+            ticker_data.append({
+                'Ticker': stat['ticker'],
+                'CC Count': stat['cc_count'],
+                'Kontrakty': stat['total_contracts'],
+                'Akcje': stat['shares_reserved'],
+                'Premium PLN': f"{stat['total_premium_pln']:,.0f} zł"
+            })
         
-        col_summary1, col_summary2, col_summary3, col_summary4 = st.columns(4)
+        st.dataframe(ticker_data, use_container_width=True)
+    
+    # SZCZEGÓŁOWE TABELE CC
+    st.markdown("### 🔍 Szczegółowe pozycje CC")
+    
+    coverage_details = db.get_cc_coverage_details()
+    
+    if not coverage_details:
+        st.error("❌ Błąd pobierania szczegółów pokrycia")
+        return
+    
+    # Sprawdź alerty expiry
+    from datetime import date
+    today = date.today()
+    
+    for cc_detail in coverage_details:
+        days_to_expiry = cc_detail['days_to_expiry']
         
-        with col_summary1:
-            st.metric("🎯 Pozycje CC", len(open_cc_list))
+        # Alert styling
+        if days_to_expiry <= 0:
+            alert_color = "🔴"
+            alert_text = "EXPIRED"
+        elif days_to_expiry <= 3:
+            alert_color = "🟠"
+            alert_text = f"{days_to_expiry}d left"
+        elif days_to_expiry <= 7:
+            alert_color = "🟡"
+            alert_text = f"{days_to_expiry}d left"
+        else:
+            alert_color = "🟢"
+            alert_text = f"{days_to_expiry}d left"
         
-        with col_summary2:
-            st.metric("📊 Kontrakty", total_contracts)
-            st.caption(f"{total_contracts * 100} akcji zarezerwowane")
-        
-        with col_summary3:
-            st.metric("💰 Premium łączna", f"{total_premium_pln:.2f} zł")
-        
-        with col_summary4:
-            alert_count = len(expiry_alerts)
-            if alert_count > 0:
-                st.metric("🚨 Alerty expiry", alert_count, delta_color="inverse")
-            else:
-                st.metric("✅ Alerty expiry", "0", delta_color="normal")
-        
-        # SPRAWDZENIE REZERWACJI AKCJI
-        st.markdown("### 🔒 Sprawdzenie rezerwacji akcji")
-        
-        if st.button("📊 Pokaż wpływ na portfel akcji"):
-            # Sprawdź quantity_open przed i po CC
-            for cc in open_cc_list:
-                ticker = cc['ticker']
-                contracts = cc['contracts']
+        # Expander per CC
+        with st.expander(
+            f"{alert_color} CC #{cc_detail['cc_id']} - {cc_detail['ticker']} @ ${cc_detail['strike_usd']} ({alert_text})",
+            expanded=(days_to_expiry <= 3)
+        ):
+            
+            col_cc1, col_cc2, col_cc3 = st.columns(3)
+            
+            with col_cc1:
+                st.markdown("**📊 Parametry CC:**")
+                st.write(f"🎯 **Strike**: ${cc_detail['strike_usd']:.2f}")
+                st.write(f"📦 **Kontrakty**: {cc_detail['contracts']} = {cc_detail['shares_needed']} akcji")
+                st.write(f"💰 **Premium**: ${cc_detail['premium_sell_usd']:.2f} = {cc_detail['premium_sell_pln']:.0f} PLN")
+                st.write(f"💱 **FX Open**: {cc_detail['fx_open']:.4f}")
+            
+            with col_cc2:
+                st.markdown("**📅 Harmonogram:**")
+                st.write(f"📅 **Otwarte**: {cc_detail['open_date']}")
+                st.write(f"📅 **Expiry**: {cc_detail['expiry_date']}")
+                st.write(f"⏱️ **Dni do expiry**: {cc_detail['days_to_expiry']}")
+                st.write(f"📈 **Dni trzymane**: {cc_detail['days_held']}")
+            
+            with col_cc3:
+                st.markdown("**💹 Yield Analysis:**")
+                st.write(f"🏦 **Koszt bazowy**: {cc_detail['total_cost_basis']:,.0f} PLN")
+                st.write(f"📊 **Premium yield**: {cc_detail['premium_yield_pct']:.2f}%")
+                st.write(f"📈 **Annualized yield**: {cc_detail['annualized_yield_pct']:.1f}%")
                 
-                st.write(f"**CC #{cc['id']} - {ticker}**: {contracts} kontraktów = {contracts * 100} akcji zarezerwowane")
-                
-                # Pokaż dostępne akcje teraz
-                available_now = db.get_available_quantity(ticker)
-                st.write(f"   → Dostępne teraz: {available_now} akcji")
-                
-                if available_now < 100:
-                    st.warning(f"   ⚠️ Za mało akcji na kolejne CC")
+                # Yield quality indicator
+                if cc_detail['annualized_yield_pct'] >= 20:
+                    st.success("🚀 Excellent yield")
+                elif cc_detail['annualized_yield_pct'] >= 12:
+                    st.info("✅ Good yield")
+                elif cc_detail['annualized_yield_pct'] >= 8:
+                    st.warning("⚠️ Moderate yield")
                 else:
-                    max_new_cc = available_now // 100
-                    st.info(f"   ✅ Można sprzedać jeszcze {max_new_cc} CC")
+                    st.error("❌ Low yield")
+            
+            # FIFO COVERAGE TABLE
+            if cc_detail['lot_allocations']:
+                st.markdown("**🔄 Pokrycie FIFO (LOT-y):**")
                 
-    except Exception as e:
-        st.error(f"❌ Błąd pobierania otwartych CC: {e}")
+                fifo_data = []
+                for alloc in cc_detail['lot_allocations']:
+                    fifo_data.append({
+                        'LOT ID': f"#{alloc['lot_id']}",
+                        'Data zakupu': alloc['buy_date'],
+                        'Cena zakupu': f"${alloc['buy_price_usd']:.2f}",
+                        'FX Rate': f"{alloc['fx_rate']:.4f}",
+                        'Koszt/akcję PLN': f"{alloc['cost_per_share_pln']:.2f} zł",
+                        'Akcje pokryte': alloc['shares_allocated'],
+                        'Koszt pokrycia': f"{alloc['total_cost_pln']:.0f} zł"
+                    })
+                
+                st.dataframe(fifo_data, use_container_width=True)
+                
+                # Podsumowanie pokrycia
+                total_covered = sum([alloc['shares_allocated'] for alloc in cc_detail['lot_allocations']])
+                if total_covered == cc_detail['shares_needed']:
+                    st.success(f"✅ Pełne pokrycie: {total_covered}/{cc_detail['shares_needed']} akcji")
+                else:
+                    st.warning(f"⚠️ Niepełne pokrycie: {total_covered}/{cc_detail['shares_needed']} akcji")
+            else:
+                st.error("❌ Brak informacji o pokryciu FIFO!")
+    
+    # Quick Actions
+    st.markdown("---")
+    st.markdown("### ⚡ Szybkie akcje")
+    
+    col_action1, col_action2, col_action3 = st.columns(3)
+    
+    with col_action1:
+        if st.button("🔄 Odśwież dane", key="refresh_open_cc"):
+            st.rerun()
+    
+    with col_action2:
+        if st.button("💸 Buyback CC", key="quick_buyback"):
+            st.info("💡 Przejdź do zakładki 'Buyback & Expiry'")
+    
+    with col_action3:
+        if st.button("📈 Sprzedaj kolejne CC", key="quick_sell_more"):
+            st.info("💡 Przejdź do zakładki 'Sprzedaż CC'")
 
 def show_cc_history_tab():
-    """Tab historii CC - PUNKT 57: Z filtrami i eksportem CSV"""
+    """
+    PUNKT 67: Historia CC z zaawansowaną analizą P/L (CLEANUP UI)
+    """
     st.subheader("📋 Historia Covered Calls")
-    st.success("✅ **PUNKT 57 UKOŃCZONY** - Historia CC z filtrami i eksportem CSV")
     
-    # Pobierz wszystkie CC
-    try:
-        all_cc_list = db.get_covered_calls_summary()  # Wszystkie CC
+    # CLEANUP: Usunięto deweloperskie komunikaty
+    # st.success("✅ **PUNKT 57 UKOŃCZONY** - Historia CC z filtrami i eksportem CSV")
+    
+    # Performance Summary
+    performance = db.get_cc_performance_summary()
+    
+    if performance and performance.get('total_closed', 0) > 0:
+        st.markdown("### 📊 Performance Summary")
         
-        if not all_cc_list:
-            st.info("💡 **Brak historii CC**")
-            st.markdown("*Historia pojawi się po sprzedaży pierwszych opcji*")
-            return
+        col_perf1, col_perf2, col_perf3, col_perf4 = st.columns(4)
         
-        # FILTRY W EXPANDER
-        with st.expander("🔍 Filtry i sortowanie", expanded=False):
-            col_filter1, col_filter2, col_filter3, col_filter4 = st.columns(4)
-            
-            with col_filter1:
-                all_tickers = sorted(list(set([cc['ticker'] for cc in all_cc_list])))
-                selected_tickers = st.multiselect(
-                    "Tickery:",
-                    options=all_tickers,
-                    default=all_tickers,
-                    key="cc_ticker_filter"
-                )
-            
-            with col_filter2:
-                status_options = ["Wszystkie", "Otwarte", "Bought back", "Expired"]
-                selected_status = st.selectbox(
-                    "Status:",
-                    options=status_options,
-                    index=0,
-                    key="cc_status_filter"
-                )
-            
-            with col_filter3:
-                pl_options = ["Wszystkie", "Tylko zyski", "Tylko straty", "Bez P/L (otwarte)"]
-                selected_pl = st.selectbox(
-                    "P/L:",
-                    options=pl_options,
-                    index=0,
-                    key="cc_pl_filter"
-                )
-            
-            with col_filter4:
-                sort_options = {
-                    "Data otwarcia (najnowsze)": ("open_date", True),
-                    "Data otwarcia (najstarsze)": ("open_date", False),
-                    "P/L (najwyższy)": ("pl_pln", True),
-                    "Premium (najwyższa)": ("premium_sell_pln", True),
-                    "Ticker A-Z": ("ticker", False)
-                }
-                
-                selected_sort = st.selectbox(
-                    "Sortowanie:",
-                    options=list(sort_options.keys()),
-                    index=0,
-                    key="cc_sort_filter"
-                )
+        with col_perf1:
+            st.metric(
+                "💰 Total P/L",
+                f"{performance['total_realized_pl']:,.0f} PLN",
+                help="Łączny zrealizowany P/L"
+            )
         
-        # APLIKACJA FILTRÓW
-        filtered_cc = []
+        with col_perf2:
+            st.metric(
+                "📈 Avg per CC",
+                f"{performance['avg_pl_per_cc']:,.0f} PLN",
+                help="Średni P/L na pozycję"
+            )
         
-        for cc in all_cc_list:
-            # Filtr tickery
-            if cc['ticker'] not in selected_tickers:
-                continue
+        with col_perf3:
+            win_rate = (performance['expired_count'] / performance['total_closed'] * 100) if performance['total_closed'] > 0 else 0
+            st.metric(
+                "🏆 Win Rate",
+                f"{win_rate:.1f}%",
+                help="% opcji które wygasły (max profit)"
+            )
+        
+        with col_perf4:
+            st.metric(
+                "📝 Total Closed",
+                f"{performance['total_closed']}",
+                help=f"Expired: {performance['expired_count']}, Bought back: {performance['buyback_count']}"
+            )
+        
+        # Performance per ticker
+        if performance['ticker_performance']:
+            st.markdown("### 🎯 Performance per ticker")
             
-            # Filtr status
-            if selected_status != "Wszystkie":
-                if selected_status == "Otwarte" and cc['status'] != 'open':
-                    continue
-                elif selected_status == "Bought back" and cc['status'] != 'bought_back':
-                    continue
-                elif selected_status == "Expired" and cc['status'] != 'expired':
-                    continue
+            ticker_data = []
+            for ticker_perf in performance['ticker_performance']:
+                ticker_data.append({
+                    'Ticker': ticker_perf['ticker'],
+                    'CC Count': ticker_perf['cc_count'],
+                    'Total P/L': f"{ticker_perf['total_pl']:,.0f} PLN",
+                    'Avg P/L': f"{ticker_perf['avg_pl']:,.0f} PLN",
+                    'Win Rate': f"{ticker_perf['win_rate']:.1f}%",
+                    'Expired': ticker_perf['expired_count'],
+                    'Bought Back': ticker_perf['buyback_count']
+                })
             
-            # Filtr P/L
-            if selected_pl != "Wszystkie":
-                pl_pln = cc['pl_pln'] or 0
-                if selected_pl == "Tylko zyski" and pl_pln <= 0:
-                    continue
-                elif selected_pl == "Tylko straty" and pl_pln >= 0:
-                    continue
-                elif selected_pl == "Bez P/L (otwarte)" and cc['status'] != 'open':
-                    continue
-            
-            filtered_cc.append(cc)
-        
-        # SORTOWANIE
-        sort_field, sort_desc = sort_options[selected_sort]
-        
-        if sort_field == "open_date":
-            filtered_cc.sort(key=lambda x: x['open_date'], reverse=sort_desc)
-        elif sort_field == "ticker":
-            filtered_cc.sort(key=lambda x: x['ticker'], reverse=sort_desc)
-        elif sort_field == "pl_pln":
-            filtered_cc.sort(key=lambda x: x['pl_pln'] or 0, reverse=sort_desc)
-        elif sort_field == "premium_sell_pln":
-            filtered_cc.sort(key=lambda x: x['premium_sell_pln'], reverse=sort_desc)
-        
-        # INFORMACJA O FILTRACH
-        if len(filtered_cc) != len(all_cc_list):
-            st.info(f"🔍 Pokazano **{len(filtered_cc)}** z **{len(all_cc_list)}** pozycji CC")
-        
-        if not filtered_cc:
-            st.warning("🔍 Brak CC pasujących do filtrów")
-            return
-        
-        st.write(f"📋 **Historia CC**: {len(filtered_cc)} pozycji")
-        
-        # Przygotuj dane do tabeli
-        history_data = []
-        total_pl_pln = 0
-        total_premium_pln = 0
-        open_count = 0
-        closed_count = 0
-        
-        for cc in filtered_cc:
-            # Status zamknięcia i ikony
-            if cc['status'] == 'open':
-                close_status = "🟢 Otwarte"
-                close_method = "Aktywne"
-                open_count += 1
-            elif cc['status'] == 'expired':
-                close_status = "📅 Expired"
-                close_method = "Wygasła"
-                closed_count += 1
-            else:
-                close_status = "💰 Bought back"
-                close_method = "Odkupiona"
-                closed_count += 1
-            
-            pl_pln = cc['pl_pln'] or 0
-            premium_pln = cc['premium_sell_pln']
-            
-            total_pl_pln += pl_pln
-            total_premium_pln += premium_pln
-            
-            # Status P/L z kolorami
-            if cc['status'] == 'open':
-                pl_status = f"⏳ {premium_pln:.2f} zł"  # Potencjalny zysk
-            elif pl_pln >= 0:
-                pl_status = f"🟢 +{pl_pln:.2f} zł"
-            else:
-                pl_status = f"🔴 {pl_pln:.2f} zł"
-            
-            # Kalkulacja yield (annualized)
-            if cc['status'] == 'open':
-                # Dni od otwarcia
-                open_date_obj = datetime.strptime(cc['open_date'], '%Y-%m-%d').date() if isinstance(cc['open_date'], str) else cc['open_date']
-                days_held = (date.today() - open_date_obj).days or 1
-            else:
-                # Dni całkowite (od open do close)
-                open_date_obj = datetime.strptime(cc['open_date'], '%Y-%m-%d').date() if isinstance(cc['open_date'], str) else cc['open_date']
-                if cc['status'] == 'expired':
-                    expiry_date_obj = datetime.strptime(cc['expiry_date'], '%Y-%m-%d').date() if isinstance(cc['expiry_date'], str) else cc['expiry_date']
-                    days_held = (expiry_date_obj - open_date_obj).days or 1
-                else:
-                    # Bought back - używamy expiry jako przybliżenia
-                    expiry_date_obj = datetime.strptime(cc['expiry_date'], '%Y-%m-%d').date() if isinstance(cc['expiry_date'], str) else cc['expiry_date']
-                    days_held = (expiry_date_obj - open_date_obj).days or 1
-            
-            # Yield calculation (premium relative to strike value)
-            strike_value_pln = cc['strike_usd'] * cc['contracts'] * 100 * cc['fx_open']
-            if strike_value_pln > 0:
-                yield_percent = (premium_pln / strike_value_pln) * 100
-                annualized_yield = yield_percent * (365 / days_held) if days_held > 0 else 0
-                yield_display = f"{annualized_yield:.1f}%"
-            else:
-                yield_display = "N/A"
-            
-            history_data.append({
-                'ID': cc['id'],
-                'Ticker': cc['ticker'],
-                'Kontrakty': cc['contracts'],
-                'Strike': f"${cc['strike_usd']:.2f}",
-                'Premium/akcja': f"${cc['premium_sell_usd']:.2f}",
-                'Premium PLN': f"{premium_pln:.2f} zł",
-                'Open Date': cc['open_date'],
-                'Expiry': cc['expiry_date'],
-                'Status': close_status,
-                'P/L PLN': pl_status,
-                'Yield Ann.': yield_display,
-                'Dni': days_held,
-                'Kurs Open': f"{cc['fx_open']:.4f}"
-            })
-        
-        # Wyświetl tabelę
-        df_history = pd.DataFrame(history_data)
-        
-        st.dataframe(
-            df_history,
-            use_container_width=True,
-            height=400,
-            column_config={
-                'ID': st.column_config.NumberColumn('ID', width=50),
-                'Ticker': st.column_config.TextColumn('Ticker', width=70),
-                'Kontrakty': st.column_config.NumberColumn('Kontrakty', width=70),
-                'Strike': st.column_config.TextColumn('Strike', width=80),
-                'Premium/akcja': st.column_config.TextColumn('Premium/akcja', width=90),
-                'Premium PLN': st.column_config.TextColumn('Premium PLN', width=100),
-                'Open Date': st.column_config.DateColumn('Open Date', width=100),
-                'Expiry': st.column_config.DateColumn('Expiry', width=100),
-                'Status': st.column_config.TextColumn('Status', width=110),
-                'P/L PLN': st.column_config.TextColumn('P/L PLN', width=100),
-                'Yield Ann.': st.column_config.TextColumn('Yield Ann.', width=80),
-                'Dni': st.column_config.NumberColumn('Dni', width=60),
-                'Kurs Open': st.column_config.TextColumn('Kurs Open', width=80)
-            }
+            st.dataframe(ticker_data, use_container_width=True)
+    
+    # Szczegółowa historia
+    st.markdown("### 📋 Detailed History")
+    
+    closed_cc_analysis = db.get_closed_cc_analysis()
+    
+    if not closed_cc_analysis:
+        st.info("📝 **Brak zamkniętych CC**")
+        st.markdown("*Historia pojawi się po buyback lub expiry pierwszych opcji*")
+        return
+    
+    # CLEANUP: Uproszczone filtry (bez zbędnych expander-ów)
+    col_filter1, col_filter2, col_filter3 = st.columns(3)
+    
+    with col_filter1:
+        all_tickers = sorted(list(set([cc['ticker'] for cc in closed_cc_analysis])))
+        selected_tickers = st.multiselect(
+            "Filtry - Tickery:",
+            options=all_tickers,
+            default=all_tickers,
+            key="history_ticker_filter"
         )
+    
+    with col_filter2:
+        status_filter = st.selectbox(
+            "Status:",
+            options=["Wszystkie", "Expired", "Bought back"],
+            key="history_status_filter"
+        )
+    
+    with col_filter3:
+        sort_options = ["Date ↓", "P/L ↓", "Yield ↓", "Ticker A-Z"]
+        sort_by = st.selectbox(
+            "Sortowanie:",
+            options=sort_options,
+            key="history_sort_filter"
+        )
+    
+    # Aplikuj filtry
+    filtered_cc = []
+    for cc in closed_cc_analysis:
+        # Filtr ticker
+        if cc['ticker'] not in selected_tickers:
+            continue
         
-        # PODSUMOWANIE SZCZEGÓŁOWE
-        st.markdown("### 📊 Szczegółowe podsumowanie")
+        # Filtr status
+        if status_filter != "Wszystkie":
+            if status_filter == "Expired" and cc['status'] != 'expired':
+                continue
+            elif status_filter == "Bought back" and cc['status'] != 'bought_back':
+                continue
         
-        col_summary1, col_summary2, col_summary3, col_summary4, col_summary5 = st.columns(5)
+        filtered_cc.append(cc)
+    
+    # Sortowanie
+    if sort_by == "Date ↓":
+        filtered_cc.sort(key=lambda x: x['close_date'], reverse=True)
+    elif sort_by == "P/L ↓":
+        filtered_cc.sort(key=lambda x: x['pl_pln'], reverse=True)
+    elif sort_by == "Yield ↓":
+        filtered_cc.sort(key=lambda x: x['annualized_yield_pct'], reverse=True)
+    elif sort_by == "Ticker A-Z":
+        filtered_cc.sort(key=lambda x: x['ticker'])
+    
+    if not filtered_cc:
+        st.warning("⚠️ Brak CC po zastosowaniu filtrów")
+        return
+    
+    # Tabela szczegółowa
+    st.write(f"**Wyniki:** {len(filtered_cc)} z {len(closed_cc_analysis)} CC")
+    
+    for cc in filtered_cc:
+        # Color coding based on P/L
+        if cc['pl_pln'] > 0:
+            pl_emoji = "💚"
+            pl_color = "success"
+        elif cc['pl_pln'] < 0:
+            pl_emoji = "❤️"
+            pl_color = "error"
+        else:
+            pl_emoji = "⚪"
+            pl_color = "info"
         
-        with col_summary1:
-            st.metric("📋 Łączne CC", len(filtered_cc))
-            st.caption(f"Otwarte: {open_count}, Zamknięte: {closed_count}")
-        
-        with col_summary2:
-            total_contracts = sum([cc['contracts'] for cc in filtered_cc])
-            st.metric("🎯 Kontrakty", total_contracts)
-            st.caption(f"{total_contracts * 100} akcji objęte")
-        
-        with col_summary3:
-            st.metric("💰 Premium łączna", f"{total_premium_pln:.2f} zł")
-            st.caption("Suma wszystkich premium")
-        
-        with col_summary4:
-            if closed_count > 0:
-                profitable = len([cc for cc in filtered_cc if (cc['pl_pln'] or 0) >= 0 and cc['status'] != 'open'])
-                win_rate = (profitable / closed_count) * 100 if closed_count > 0 else 0
-                st.metric("🎯 Win Rate", f"{win_rate:.1f}%")
-                st.caption(f"{profitable}/{closed_count} zyskowne")
-            else:
-                st.metric("🎯 Win Rate", "N/A")
-                st.caption("Brak zamkniętych")
-        
-        with col_summary5:
-            realized_pl = sum([cc['pl_pln'] or 0 for cc in filtered_cc if cc['status'] != 'open'])
-            if realized_pl >= 0:
-                st.metric("💵 P/L Zrealizowany", f"+{realized_pl:.2f} zł", delta_color="normal")
-            else:
-                st.metric("💵 P/L Zrealizowany", f"{realized_pl:.2f} zł", delta_color="inverse")
-            st.caption("Tylko zamknięte CC")
-        
-        # EKSPORT CSV - PUNKT 57
-        st.markdown("---")
-        st.markdown("### 📤 Eksport do CSV")
-        
-        col_export1, col_export2 = st.columns(2)
-        
-        with col_export1:
-            # Przygotuj dane do eksportu
-            csv_cc_data = []
-            for cc in filtered_cc:
-                pl_pln = cc['pl_pln'] or 0
+        with st.expander(
+            f"{cc['outcome_emoji']} {pl_emoji} CC #{cc['cc_id']} - {cc['ticker']} - {cc['pl_pln']:+,.0f} PLN ({cc['annualized_yield_pct']:+.1f}% p.a.)",
+            expanded=False
+        ):
+            
+            col_detail1, col_detail2, col_detail3 = st.columns(3)
+            
+            with col_detail1:
+                st.markdown("**📊 Podstawowe info:**")
+                st.write(f"🎯 **Ticker**: {cc['ticker']} ({cc['contracts']} kontr.)")
+                st.write(f"💰 **Strike**: ${cc['strike_usd']:.2f}")
+                st.write(f"📅 **Opened**: {cc['open_date']}")
+                st.write(f"📅 **Closed**: {cc['close_date']}")
+                st.write(f"⏱️ **Days held**: {cc['days_held']}")
+                st.write(f"🏷️ **Status**: {cc['outcome_text']}")
+            
+            with col_detail2:
+                st.markdown("**💸 Premium Analysis:**")
+                st.write(f"📈 **Sell Premium**: ${cc['premium_sell_usd']:.2f} = {cc['premium_sell_pln']:.0f} PLN")
+                if cc['premium_buyback_usd'] > 0:
+                    st.write(f"📉 **Buyback Premium**: ${cc['premium_buyback_usd']:.2f} = {cc['premium_buyback_pln']:.0f} PLN")
+                st.write(f"💰 **Net Premium**: ${cc['net_premium_usd']:.2f} = {cc['net_premium_pln']:.0f} PLN")
+                st.write(f"💱 **FX Open**: {cc['fx_open']:.4f}")
+                if cc['fx_close'] != cc['fx_open']:
+                    st.write(f"💱 **FX Close**: {cc['fx_close']:.4f}")
+            
+            with col_detail3:
+                st.markdown("**📈 Performance:**")
                 
-                # Kalkulacja dni
-                open_date_obj = datetime.strptime(cc['open_date'], '%Y-%m-%d').date() if isinstance(cc['open_date'], str) else cc['open_date']
-                if cc['status'] == 'open':
-                    days_held = (date.today() - open_date_obj).days or 1
+                # P/L display with color
+                if cc['pl_pln'] > 0:
+                    st.success(f"💚 **P/L**: +{cc['pl_pln']:.0f} PLN")
+                elif cc['pl_pln'] < 0:
+                    st.error(f"❤️ **P/L**: {cc['pl_pln']:.0f} PLN")
                 else:
-                    expiry_date_obj = datetime.strptime(cc['expiry_date'], '%Y-%m-%d').date() if isinstance(cc['expiry_date'], str) else cc['expiry_date']
-                    days_held = (expiry_date_obj - open_date_obj).days or 1
+                    st.info(f"⚪ **P/L**: {cc['pl_pln']:.0f} PLN")
                 
-                # Yield
-                strike_value_pln = cc['strike_usd'] * cc['contracts'] * 100 * cc['fx_open']
-                yield_percent = (cc['premium_sell_pln'] / strike_value_pln) * 100 if strike_value_pln > 0 else 0
-                annualized_yield = yield_percent * (365 / days_held) if days_held > 0 else 0
+                st.write(f"📊 **Premium Yield**: {cc['premium_yield_pct']:.2f}%")
+                st.write(f"📅 **Annualized**: {cc['annualized_yield_pct']:.1f}% p.a.")
                 
-                csv_cc_data.append({
-                    'CC_ID': cc['id'],
+                # Performance rating
+                if cc['annualized_yield_pct'] >= 20:
+                    st.success("🚀 Excellent")
+                elif cc['annualized_yield_pct'] >= 12:
+                    st.info("✅ Good")
+                elif cc['annualized_yield_pct'] >= 8:
+                    st.warning("⚠️ OK")
+                else:
+                    st.error("❌ Poor")
+    
+    # Export functionality
+    st.markdown("---")
+    col_export1, col_export2 = st.columns(2)
+    
+    with col_export1:
+        if st.button("📊 Export do CSV", key="export_history"):
+            # Przygotuj dane do eksportu
+            export_data = []
+            for cc in filtered_cc:
+                export_data.append({
+                    'CC_ID': cc['cc_id'],
                     'Ticker': cc['ticker'],
                     'Contracts': cc['contracts'],
                     'Strike_USD': cc['strike_usd'],
-                    'Premium_Per_Share_USD': cc['premium_sell_usd'],
+                    'Premium_Sell_USD': cc['premium_sell_usd'],
+                    'Premium_Sell_PLN': cc['premium_sell_pln'],
+                    'Premium_Buyback_USD': cc['premium_buyback_usd'],
+                    'Premium_Buyback_PLN': cc['premium_buyback_pln'],
+                    'Net_Premium_PLN': cc['net_premium_pln'],
+                    'P/L_PLN': cc['pl_pln'],
                     'Open_Date': cc['open_date'],
-                    'Expiry_Date': cc['expiry_date'],
+                    'Close_Date': cc['close_date'],
+                    'Days_Held': cc['days_held'],
                     'Status': cc['status'],
-                    'FX_Rate_Open': cc['fx_open'],
-                    'Premium_Total_PLN': cc['premium_sell_pln'],
-                    'Buyback_PLN': cc['premium_buyback_pln'] or 0,
-                    'PL_PLN': pl_pln,
-                    'Days_Held': days_held,
-                    'Yield_Percent': round(yield_percent, 2),
-                    'Yield_Annualized': round(annualized_yield, 2),
-                    'Created_At': cc['created_at']
+                    'Premium_Yield_%': round(cc['premium_yield_pct'], 2),
+                    'Annualized_Yield_%': round(cc['annualized_yield_pct'], 1),
+                    'FX_Open': cc['fx_open'],
+                    'FX_Close': cc['fx_close']
                 })
             
-            # Konwersja do CSV
-            import io
-            df_csv = pd.DataFrame(csv_cc_data)
-            csv_buffer = io.StringIO()
-            df_csv.to_csv(csv_buffer, index=False, encoding='utf-8')
-            csv_data = csv_buffer.getvalue()
+            import pandas as pd
+            df = pd.DataFrame(export_data)
+            csv = df.to_csv(index=False)
             
-            # Przycisk download
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"covered_calls_history_{timestamp}.csv"
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
             st.download_button(
-                label="📥 Pobierz historię CC CSV",
-                data=csv_data,
-                file_name=filename,
+                label="💾 Pobierz CSV",
+                data=csv,
+                file_name=f"cc_history_{timestamp}.csv",
                 mime="text/csv",
-                help=f"Eksport {len(filtered_cc)} pozycji CC",
-                use_container_width=True
+                key="download_history_csv"
             )
-            
-            st.caption(f"📊 Zawiera {len(filtered_cc)} pozycji CC z filtrów")
-        
-        with col_export2:
-            # Podsumowanie dla księgowości
-            st.markdown("**📋 Eksport dla księgowości:**")
-            
-            if st.button("📊 Generuj raport księgowy"):
-                # Przygotuj dane tylko zamkniętych CC dla PIT
-                closed_cc = [cc for cc in filtered_cc if cc['status'] != 'open']
-                
-                if closed_cc:
-                    accounting_data = []
-                    for cc in closed_cc:
-                        pl_pln = cc['pl_pln'] or 0
-                        
-                        accounting_data.append({
-                            'Data_Otwarcia': cc['open_date'],
-                            'Data_Zamkniecia': cc['expiry_date'] if cc['status'] == 'expired' else 'BUYBACK',
-                            'Ticker': cc['ticker'],
-                            'Typ_Operacji': 'COVERED_CALL',
-                            'Przychod_PLN': cc['premium_sell_pln'],
-                            'Koszt_PLN': cc['premium_buyback_pln'] or 0,
-                            'Zysk_Strata_PLN': pl_pln,
-                            'Kurs_NBP_Otwarcie': cc['fx_open'],
-                            'Kurs_NBP_Zamkniecie': cc.get('fx_close', ''),
-                            'Status_PIT': 'PRZYCHOD' if pl_pln >= 0 else 'STRATA'
-                        })
-                    
-                    df_accounting = pd.DataFrame(accounting_data)
-                    csv_accounting_buffer = io.StringIO()
-                    df_accounting.to_csv(csv_accounting_buffer, index=False, encoding='utf-8')
-                    csv_accounting_data = csv_accounting_buffer.getvalue()
-                    
-                    accounting_filename = f"cc_accounting_report_{timestamp}.csv"
-                    
-                    st.download_button(
-                        label="📋 Pobierz raport księgowy",
-                        data=csv_accounting_data,
-                        file_name=accounting_filename,
-                        mime="text/csv",
-                        help="Dane dla PIT-38 (tylko zamknięte CC)",
-                        use_container_width=True,
-                        key="accounting_download"
-                    )
-                    
-                    st.success(f"✅ Wygenerowano raport księgowy: {len(closed_cc)} zamkniętych CC")
-                else:
-                    st.warning("⚠️ Brak zamkniętych CC do raportu księgowego")
-            
-            st.caption("🏛️ Raport zawiera tylko zamknięte CC dla PIT-38")
-        
-    except Exception as e:
-        st.error(f"❌ Błąd pobierania historii CC: {e}")
     
-    # Status punktu
-    st.markdown("---")
-    st.success("✅ **PUNKT 57 UKOŃCZONY** - Historia CC z filtrami, yield i eksportem CSV!")
-    st.info("🔄 **NASTĘPNY KROK**: PUNKT 58-60 - Finalizacja modułu Options")
+    with col_export2:
+        st.info(f"📋 **{len(filtered_cc)} CC** ready to export")
+
+    
 
 # Test funkcjonalności (opcjonalny)
 def test_options_prerequisites():
@@ -1264,6 +1167,304 @@ def test_options_prerequisites():
         pass  # Testy opcjonalne
     
     return results
+    
+def show_cc_management_section():
+    """
+    PUNKT 63: Sekcja zarządzania CC (usuwanie, edycja)
+    """
+    st.markdown("---")
+    st.markdown("## 🗑️ Zarządzanie Covered Calls")
+    st.markdown("*Usuwanie błędnych operacji i czyszczenie danych*")
+    
+    # Pobierz listę CC do zarządzania
+    cc_list = db.get_deletable_cc_list()
+    
+    if not cc_list:
+        st.info("📝 Brak Covered Calls do zarządzania")
+        return
+    
+    st.markdown(f"### 📋 Lista CC ({len(cc_list)} rekordów)")
+    
+    # Tabela z przyciskami usuwania
+    for i, cc in enumerate(cc_list):
+        with st.expander(f"CC #{cc['id']} - {cc['ticker']} ({cc['contracts']} kontr.) - {cc['status']}", expanded=False):
+            
+            col_info, col_actions = st.columns([2, 1])
+            
+            with col_info:
+                st.markdown("**📊 Szczegóły:**")
+                st.write(f"🎯 **Ticker**: {cc['ticker']}")
+                st.write(f"📦 **Kontrakty**: {cc['contracts']} = {cc['shares_reserved']} akcji")
+                st.write(f"💰 **Premium**: ${cc['premium_sell_usd']:.2f} = {cc['premium_sell_pln']:.2f} PLN")
+                st.write(f"📅 **Otwarte**: {cc['open_date']} → **Expiry**: {cc['expiry_date']}")
+                st.write(f"🔒 **Status**: {cc['status']}")
+                
+                if cc['close_date']:
+                    st.write(f"❌ **Zamknięte**: {cc['close_date']}")
+                
+                # Ryzyko usunięcia
+                if cc['status'] == 'open':
+                    st.warning(f"⚠️ **Ryzyko**: {cc['delete_risk']}")
+                else:
+                    st.success(f"✅ **Ryzyko**: {cc['delete_risk']}")
+            
+            with col_actions:
+                st.markdown("**🔧 Akcje:**")
+                
+                # Przycisk usuwania z potwierdzeniem
+                delete_key = f"delete_cc_{cc['id']}"
+                confirm_key = f"confirm_delete_{cc['id']}"
+                
+                if st.button(f"🗑️ Usuń CC #{cc['id']}", key=delete_key, type="secondary"):
+                    st.session_state[confirm_key] = True
+                
+                # Potwierdzenie usunięcia
+                if st.session_state.get(confirm_key, False):
+                    st.warning("⚠️ **POTWIERDŹ USUNIĘCIE**")
+                    
+                    col_confirm, col_cancel = st.columns(2)
+                    
+                    with col_confirm:
+                        if st.button("✅ TAK, usuń", key=f"yes_delete_{cc['id']}", type="primary"):
+                            # Wykonaj usunięcie
+                            result = db.delete_covered_call(cc['id'], confirm_delete=True)
+                            
+                            if result['success']:
+                                st.success(f"✅ {result['message']}")
+                                details = result['details']
+                                st.info(f"🔓 Zwolniono {details['shares_released']} akcji {details['ticker']}")
+                                if details['cashflows_deleted'] > 0:
+                                    st.info(f"💸 Usunięto {details['cashflows_deleted']} powiązanych cashflow")
+                                
+                                # Wyczyść potwierdzenie i odśwież
+                                del st.session_state[confirm_key]
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {result['message']}")
+                    
+                    with col_cancel:
+                        if st.button("❌ Anuluj", key=f"cancel_delete_{cc['id']}"):
+                            del st.session_state[confirm_key]
+                            st.rerun()
+    
+    # Dodatkowe narzędzia
+    st.markdown("---")
+    st.markdown("### 🧹 Narzędzia dodatkowe")
+    
+    col_tools1, col_tools2 = st.columns(2)
+    
+    with col_tools1:
+        if st.button("🔄 Odśwież listę", key="refresh_cc_list"):
+            st.rerun()
+    
+    with col_tools2:
+        open_count = len([cc for cc in cc_list if cc['status'] == 'open'])
+        if open_count > 0:
+            st.warning(f"⚠️ {open_count} otwartych CC - usuwanie zwolni rezerwacje!")
+        else:
+            st.success("✅ Wszystkie CC są zamknięte - bezpieczne usuwanie")
+            
+def show_cc_edit_section():
+    """
+    PUNKT 64: Sekcja edycji parametrów CC
+    """
+    st.markdown("---")
+    st.markdown("## ✏️ Edycja Covered Calls")
+    st.markdown("*Modyfikacja parametrów otwartych CC*")
+    
+    # Pobierz CC do edycji (tylko otwarte)
+    edit_candidates = db.get_cc_edit_candidates()
+    
+    if not edit_candidates:
+        st.info("📝 Brak otwartych CC do edycji")
+        return
+    
+    st.markdown(f"### 📋 Otwarte CC ({len(edit_candidates)} rekordów)")
+    
+    for cc in edit_candidates:
+        with st.expander(f"✏️ CC #{cc['id']} - {cc['ticker']} @ ${cc['strike_usd']}", expanded=False):
+            
+            col_current, col_edit = st.columns([1, 1])
+            
+            with col_current:
+                st.markdown("**📊 Aktualne parametry:**")
+                st.write(f"🎯 **Ticker**: {cc['ticker']} ({cc['contracts']} kontr.)")
+                st.write(f"💰 **Strike**: ${cc['strike_usd']:.2f}")
+                st.write(f"💸 **Premium**: ${cc['premium_sell_usd']:.2f} = {cc['premium_sell_pln']:.2f} PLN")
+                st.write(f"📅 **Expiry**: {cc['expiry_date']}")
+                st.write(f"📅 **Otwarte**: {cc['open_date']}")
+                st.write(f"💱 **Kurs otwarcia**: {cc['fx_open']:.4f}")
+            
+            with col_edit:
+                st.markdown("**✏️ Nowe wartości:**")
+                
+                edit_key_base = f"edit_cc_{cc['id']}"
+                
+                # Nowy strike
+                new_strike = st.number_input(
+                    "Strike USD:",
+                    min_value=0.01,
+                    value=float(cc['strike_usd']),
+                    step=0.01,
+                    format="%.2f",
+                    key=f"{edit_key_base}_strike"
+                )
+                
+                # Nowa premium
+                new_premium = st.number_input(
+                    "Premium USD:",
+                    min_value=0.01,
+                    value=float(cc['premium_sell_usd']),
+                    step=0.01,
+                    format="%.2f", 
+                    key=f"{edit_key_base}_premium"
+                )
+                
+                # Nowa data expiry
+                from datetime import datetime, date
+                current_expiry = datetime.strptime(cc['expiry_date'], '%Y-%m-%d').date()
+                
+                new_expiry = st.date_input(
+                    "Expiry date:",
+                    value=current_expiry,
+                    min_value=date.today(),
+                    key=f"{edit_key_base}_expiry"
+                )
+                
+                # Pokaż przeliczenie premium PLN
+                if new_premium != cc['premium_sell_usd']:
+                    new_premium_pln = round(new_premium * cc['fx_open'], 2)
+                    st.info(f"💱 Nowa premium PLN: {new_premium_pln:.2f} zł")
+                
+                # Przycisk zapisz
+                if st.button(f"💾 Zapisz zmiany", key=f"{edit_key_base}_save", type="primary"):
+                    
+                    changes = {}
+                    if new_strike != cc['strike_usd']:
+                        changes['strike_usd'] = new_strike
+                    if new_premium != cc['premium_sell_usd']:
+                        changes['premium_sell_usd'] = new_premium
+                    if new_expiry.strftime('%Y-%m-%d') != cc['expiry_date']:
+                        changes['expiry_date'] = new_expiry.strftime('%Y-%m-%d')
+                    
+                    if changes:
+                        result = db.update_covered_call(cc['id'], **changes)
+                        
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.info("📝 Zmiany: " + ", ".join(result['changes']))
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {result['message']}")
+                    else:
+                        st.warning("⚠️ Brak zmian do zapisania")
+
+
+def show_bulk_operations_section():
+    """
+    PUNKT 64: Sekcja operacji masowych
+    """
+    st.markdown("---")
+    st.markdown("## 🗑️ Operacje masowe")
+    st.markdown("*Bulk delete i cleanup danych*")
+    
+    # Pobierz wszystkie CC
+    all_cc = db.get_deletable_cc_list()
+    
+    if not all_cc:
+        st.info("📝 Brak CC do operacji masowych")
+        return
+    
+    # Filtry dla bulk operations
+    col_filter1, col_filter2 = st.columns(2)
+    
+    with col_filter1:
+        # Filtr po statusie
+        status_filter = st.selectbox(
+            "Filtruj po statusie:",
+            ["Wszystkie", "Otwarte", "Zamknięte", "Expired", "Bought back"],
+            key="bulk_status_filter"
+        )
+    
+    with col_filter2:
+        # Filtr po tickerze
+        tickers = list(set([cc['ticker'] for cc in all_cc]))
+        ticker_filter = st.selectbox(
+            "Filtruj po tickerze:",
+            ["Wszystkie"] + tickers,
+            key="bulk_ticker_filter"  
+        )
+    
+    # Zastosuj filtry
+    filtered_cc = []
+    for cc in all_cc:
+        # Filtr status
+        if status_filter != "Wszystkie":
+            if status_filter == "Otwarte" and cc['status'] != 'open':
+                continue
+            elif status_filter == "Zamknięte" and cc['status'] == 'open':
+                continue
+            elif status_filter == "Expired" and cc['status'] != 'expired':
+                continue
+            elif status_filter == "Bought back" and cc['status'] != 'bought_back':
+                continue
+        
+        # Filtr ticker
+        if ticker_filter != "Wszystkie" and cc['ticker'] != ticker_filter:
+            continue
+            
+        filtered_cc.append(cc)
+    
+    if not filtered_cc:
+        st.warning("⚠️ Brak CC po zastosowaniu filtrów")
+        return
+    
+    st.markdown(f"### 📋 Filtered CC ({len(filtered_cc)} z {len(all_cc)})")
+    
+    # Multi-select dla bulk delete
+    cc_to_delete = []
+    
+    for cc in filtered_cc[:10]:  # Pokaż max 10 dla UI
+        if st.checkbox(
+            f"CC #{cc['id']} - {cc['ticker']} ({cc['status']}) - ${cc['premium_sell_usd']:.2f}",
+            key=f"bulk_select_{cc['id']}"
+        ):
+            cc_to_delete.append(cc['id'])
+    
+    if len(filtered_cc) > 10:
+        st.info(f"📋 Pokazano 10 z {len(filtered_cc)} CC. Użyj filtrów aby zawęzić wybór.")
+    
+    # Operacje masowe
+    if cc_to_delete:
+        st.markdown(f"### 🎯 Wybrano {len(cc_to_delete)} CC do usunięcia")
+        
+        col_bulk1, col_bulk2 = st.columns(2)
+        
+        with col_bulk1:
+            if st.button(f"🗑️ USUŃ {len(cc_to_delete)} CC", key="bulk_delete_btn", type="secondary"):
+                st.session_state.bulk_delete_confirm = cc_to_delete
+        
+        with col_bulk2:
+            if st.session_state.get('bulk_delete_confirm'):
+                if st.button("✅ POTWIERDŹ BULK DELETE", key="bulk_confirm", type="primary"):
+                    result = db.bulk_delete_covered_calls(st.session_state.bulk_delete_confirm, confirm_bulk=True)
+                    
+                    if result['success']:
+                        st.success(f"✅ {result['message']}")
+                        if result['shares_released']:
+                            st.info(f"🔓 Zwolniono akcje: {result['shares_released']}")
+                    else:
+                        st.error(f"❌ {result['message']}")
+                        if result['errors']:
+                            for error in result['errors']:
+                                st.error(f"   • {error}")
+                    
+                    # Wyczyść potwierdzenie
+                    del st.session_state.bulk_delete_confirm
+                    st.rerun()
+    
+    else:
+        st.info("☑️ Zaznacz CC do operacji masowych")
 
 if __name__ == "__main__":
     show_options()  

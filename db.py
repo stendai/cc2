@@ -1873,7 +1873,17 @@ def test_buyback_expiry_operations():
 
 def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
     """
-    PUNKT 61: Sprawdza czy można sprzedać akcje bez naruszenia pokrycia otwartych CC
+    PUNKT 61 NAPRAWKA: Poprawne sprawdzanie blokad CC
+    
+    Logika:
+    1. Pobierz WSZYSTKIE akcje tickera (quantity_open z lots)  
+    2. Te akcje to już uwzględniają rezerwacje pod CC
+    3. Sprawdź czy można sprzedać quantity_to_sell
+    4. NIE DODAWAJ żadnych dodatkowych obliczeń CC!
+    
+    Dlaczego poprzednia wersja była błędna:
+    - Pobierała quantity_open (już zmniejszone o CC)
+    - Potem odejmowała CC jeszcze raz = podwójne odejmowanie!
     """
     try:
         conn = get_connection()
@@ -1883,83 +1893,77 @@ def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
         cursor = conn.cursor()
         ticker_upper = ticker.upper()
         
-        # KROK 1: Pobierz wszystkie dostępne akcje (tak samo jak get_available_quantity)
+        # KROK 1: Pobierz dostępne akcje (już po odliczeniu rezerwacji CC)
         cursor.execute("""
-            SELECT COALESCE(SUM(quantity_open), 0) as total_available
+            SELECT COALESCE(SUM(quantity_open), 0) as available_to_sell
             FROM lots 
             WHERE ticker = ? AND quantity_open > 0
         """, (ticker_upper,))
         
         result = cursor.fetchone()
-        total_available = result[0] if result and result[0] else 0
+        available_to_sell = result[0] if result else 0
         
-        # DEBUG: sprawdź co zwraca get_available_quantity dla porównania
-        available_via_get_function = get_available_quantity(ticker_upper)
+        # KROK 2: Sprawdź czy można sprzedać
+        can_sell = available_to_sell >= quantity_to_sell
         
-        # KROK 2: Pobierz otwarte CC - NAPRAWIONE zapytanie
-        cursor.execute("""
-            SELECT id, contracts, strike_usd, expiry_date
-            FROM options_cc 
-            WHERE ticker = ? AND (status = 'open' OR close_date IS NULL)
-        """, (ticker_upper,))
+        # KROK 3: Jeśli NIE MOŻNA, znajdź przyczyny (otwarte CC)
+        blocking_cc = []
+        total_shares_owned = 0
+        reserved_for_cc = 0
         
-        open_cc_list = cursor.fetchall()
-        
-        # DEBUG: sprawdź ile CC znalazło
-        print(f"🔍 DEBUG PUNKT 61:")
-        print(f"   Ticker: {ticker_upper}")
-        print(f"   Total available (query): {total_available}")
-        print(f"   Available (get_function): {available_via_get_function}")
-        print(f"   Open CC found: {len(open_cc_list)}")
-        for cc in open_cc_list:
-            print(f"     CC #{cc[0]}: {cc[1]} contracts = {cc[1]*100} shares")
-        
-        # KROK 3: Oblicz zarezerwowane akcje
-        reserved_for_cc = sum([cc[1] * 100 for cc in open_cc_list])  # contracts * 100
-        available_to_sell = total_available - reserved_for_cc
-        can_sell = quantity_to_sell <= available_to_sell
-        
-        # KROK 4: Sprawdź czy są w ogóle jakieś CC w bazie
-        cursor.execute("SELECT COUNT(*) FROM options_cc WHERE ticker = ?", (ticker_upper,))
-        total_cc_count = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM options_cc")
-        all_cc_count = cursor.fetchone()[0]
+        if not can_sell:
+            # Pobierz WSZYSTKIE akcje (bez filtra quantity_open > 0)
+            cursor.execute("""
+                SELECT COALESCE(SUM(quantity_total), 0) as total_owned,
+                       COALESCE(SUM(quantity_open), 0) as still_available
+                FROM lots 
+                WHERE ticker = ?
+            """, (ticker_upper,))
+            
+            totals = cursor.fetchone()
+            total_shares_owned = totals[0] if totals else 0
+            reserved_for_cc = total_shares_owned - available_to_sell
+            
+            # Znajdź które CC blokują
+            cursor.execute("""
+                SELECT id, contracts, strike_usd, expiry_date, open_date
+                FROM options_cc 
+                WHERE ticker = ? AND status = 'open'
+                ORDER BY open_date
+            """, (ticker_upper,))
+            
+            open_cc_list = cursor.fetchall()
+            blocking_cc = [{
+                'cc_id': cc[0], 
+                'contracts': cc[1], 
+                'shares_reserved': cc[1] * 100,
+                'strike_usd': cc[2], 
+                'expiry_date': cc[3],
+                'open_date': cc[4]
+            } for cc in open_cc_list]
         
         conn.close()
-        
-        # DEBUG info
-        print(f"   Reserved for CC: {reserved_for_cc}")
-        print(f"   Available to sell: {available_to_sell}")
-        print(f"   Can sell {quantity_to_sell}? {can_sell}")
-        print(f"   Total CC for ticker: {total_cc_count}")
-        print(f"   Total CC in DB: {all_cc_count}")
-        
-        blocking_cc = [{'cc_id': cc[0], 'contracts': cc[1], 'shares_reserved': cc[1]*100, 
-                       'strike_usd': cc[2], 'expiry_date': cc[3]} 
-                      for cc in open_cc_list]
         
         return {
             'can_sell': can_sell,
             'available_to_sell': available_to_sell,
             'reserved_for_cc': reserved_for_cc,
-            'total_available': total_available,
+            'total_available': total_shares_owned,  # Wszystkie posiadane
             'blocking_cc': blocking_cc,
-            'debug_info': {
-                'get_available_quantity': available_via_get_function,
-                'total_cc_in_db': all_cc_count,
-                'cc_for_ticker': total_cc_count,
-                'open_cc_found': len(open_cc_list)
-            },
-            'message': 'OK' if can_sell else f'Nie można sprzedać - zarezerwowane pod CC'
+            'message': 'OK' if can_sell else f'Zarezerwowane pod {len(blocking_cc)} CC'
         }
         
     except Exception as e:
         import streamlit as st
         st.error(f"Błąd check_cc_restrictions: {e}")
-        return {'can_sell': False, 'message': f'Błąd: {str(e)}', 
-                'available_to_sell': 0, 'reserved_for_cc': 0, 'total_available': 0, 
-                'blocking_cc': [], 'debug_info': {}}
+        return {
+            'can_sell': False, 
+            'message': f'Błąd: {str(e)}', 
+            'available_to_sell': 0, 
+            'reserved_for_cc': 0, 
+            'total_available': 0, 
+            'blocking_cc': []
+        }
 
 # DODATKOWO: Dodaj funkcję diagnostyczną
 
@@ -2316,6 +2320,777 @@ def reset_ticker_reservations(ticker):
             conn.close()
         print(f"❌ Błąd resetu: {e}")
         return f"Błąd: {e}"
+        
+# POPRAWKA PUNKT 63: Naprawiona funkcja delete_covered_call w db.py
+
+def delete_covered_call(cc_id, confirm_delete=False):
+    """
+    PUNKT 63: Usuwa Covered Call z automatycznym zwalnianiem rezerwacji akcji
+    POPRAWKA: Użycie prawidłowej nazwy kolumny 'date' zamiast 'transaction_date'
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Braz połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # KROK 1: Pobierz szczegóły CC
+        cursor.execute("""
+            SELECT id, ticker, contracts, status, premium_sell_usd, premium_sell_pln,
+                   open_date, expiry_date, close_date
+            FROM options_cc 
+            WHERE id = ?
+        """, (cc_id,))
+        
+        cc_data = cursor.fetchone()
+        if not cc_data:
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} nie znalezione'}
+        
+        cc_id, ticker, contracts, status, premium_sell_usd, premium_sell_pln, open_date, expiry_date, close_date = cc_data
+        shares_to_release = contracts * 100
+        
+        print(f"🗑️ USUWANIE CC #{cc_id}:")
+        print(f"   Ticker: {ticker}")
+        print(f"   Contracts: {contracts} = {shares_to_release} akcji")
+        print(f"   Status: {status}")
+        print(f"   Premium: ${premium_sell_usd} = {premium_sell_pln} PLN")
+        
+        # KROK 2: Sprawdź czy można usunąć
+        if status == 'open':
+            print("   ⚠️ CC jest otwarte - zwolnię rezerwacje akcji")
+        else:
+            print(f"   ✅ CC jest zamknięte ({status}) - bezpieczne usunięcie")
+        
+        # KROK 3: Jeśli CC otwarte, zwolnij rezerwacje akcji
+        if status == 'open':
+            print(f"   🔓 Zwalnianie {shares_to_release} akcji {ticker}...")
+            
+            # Pobierz LOT-y które mogą być zarezerwowane (quantity_open < quantity_total)
+            cursor.execute("""
+                SELECT id, quantity_total, quantity_open
+                FROM lots 
+                WHERE ticker = ? AND quantity_open < quantity_total
+                ORDER BY buy_date, id
+            """, (ticker,))
+            
+            reserved_lots = cursor.fetchall()
+            remaining_to_release = shares_to_release
+            
+            for lot_id, qty_total, qty_open in reserved_lots:
+                if remaining_to_release <= 0:
+                    break
+                
+                # Ile można zwolnić z tego LOT-a?
+                reserved_in_lot = qty_total - qty_open
+                qty_to_release = min(remaining_to_release, reserved_in_lot)
+                new_qty_open = qty_open + qty_to_release
+                
+                # Nie może przekroczyć quantity_total
+                if new_qty_open > qty_total:
+                    qty_to_release = qty_total - qty_open
+                    new_qty_open = qty_total
+                
+                if qty_to_release > 0:
+                    cursor.execute("""
+                        UPDATE lots SET quantity_open = ? WHERE id = ?
+                    """, (new_qty_open, lot_id))
+                    
+                    remaining_to_release -= qty_to_release
+                    print(f"     LOT #{lot_id}: {qty_open} -> {new_qty_open} (+{qty_to_release})")
+            
+            if remaining_to_release > 0:
+                print(f"   ⚠️ UWAGA: Nie udało się zwolnić {remaining_to_release} akcji - może być problem z danymi")
+        
+        # KROK 4: Znajdź i usuń powiązane cashflow
+        # POPRAWKA: Używamy kolumny 'date' zamiast 'transaction_date'
+        cursor.execute("""
+            SELECT id, amount_usd, amount_pln, date
+            FROM cashflows 
+            WHERE ref_table = 'options_cc' AND ref_id = ?
+        """, (cc_id,))
+        
+        related_cashflows = cursor.fetchall()
+        if related_cashflows:
+            print(f"   💸 Usuwanie {len(related_cashflows)} powiązanych cashflow:")
+            for cf_id, amount_usd, amount_pln, cf_date in related_cashflows:
+                print(f"     Cashflow #{cf_id}: ${amount_usd} ({amount_pln} PLN) z {cf_date}")
+                cursor.execute("DELETE FROM cashflows WHERE id = ?", (cf_id,))
+        
+        # KROK 5: Usuń CC
+        cursor.execute("DELETE FROM options_cc WHERE id = ?", (cc_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'CC #{cc_id} usunięte pomyślnie',
+            'details': {
+                'ticker': ticker,
+                'contracts': contracts,
+                'shares_released': shares_to_release if status == 'open' else 0,
+                'status_was': status,
+                'premium_usd': premium_sell_usd,
+                'premium_pln': premium_sell_pln,
+                'cashflows_deleted': len(related_cashflows)
+            }
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        return {
+            'success': False,
+            'message': f'Błąd usuwania CC #{cc_id}: {str(e)}'
+        }
+
+
+def get_deletable_cc_list():
+    """
+    Pobiera listę CC które można usunąć (z informacjami o ryzyku)
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, ticker, contracts, status, premium_sell_usd, premium_sell_pln,
+                   open_date, expiry_date, close_date,
+                   CASE 
+                       WHEN status = 'open' THEN 'UWAGA - zwolni rezerwacje'
+                       WHEN status = 'expired' THEN 'Bezpieczne - już zamknięte'
+                       WHEN status = 'bought_back' THEN 'Bezpieczne - już zamknięte'
+                       ELSE 'Sprawdź status'
+                   END as delete_risk
+            FROM options_cc
+            ORDER BY status, open_date DESC
+        """)
+        
+        cc_list = []
+        for row in cursor.fetchall():
+            cc_list.append({
+                'id': row[0],
+                'ticker': row[1], 
+                'contracts': row[2],
+                'status': row[3],
+                'premium_sell_usd': row[4],
+                'premium_sell_pln': row[5],
+                'open_date': row[6],
+                'expiry_date': row[7],
+                'close_date': row[8],
+                'delete_risk': row[9],
+                'shares_reserved': row[2] * 100
+            })
+        
+        conn.close()
+        return cc_list
+        
+    except Exception as e:
+        print(f"Błąd pobierania listy CC: {e}")
+        return []
+
+
+def update_covered_call(cc_id, **kwargs):
+    """
+    PUNKT 64: Edycja parametrów covered call
+    
+    Args:
+        cc_id: ID covered call
+        **kwargs: Pola do aktualizacji (strike_usd, expiry_date, premium_sell_usd, etc.)
+    
+    Returns:
+        dict: Status operacji
+    """
+    try:
+        if not kwargs:
+            return {'success': False, 'message': 'Brak parametrów do aktualizacji'}
+        
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # Sprawdź czy CC istnieje i pobierz aktualne dane
+        cursor.execute("""
+            SELECT id, ticker, contracts, status, premium_sell_usd, premium_sell_pln,
+                   strike_usd, expiry_date, fx_open
+            FROM options_cc 
+            WHERE id = ?
+        """, (cc_id,))
+        
+        cc_data = cursor.fetchone()
+        if not cc_data:
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} nie znalezione'}
+        
+        current_cc = {
+            'id': cc_data[0],
+            'ticker': cc_data[1], 
+            'contracts': cc_data[2],
+            'status': cc_data[3],
+            'premium_sell_usd': cc_data[4],
+            'premium_sell_pln': cc_data[5],
+            'strike_usd': cc_data[6],
+            'expiry_date': cc_data[7],
+            'fx_open': cc_data[8]
+        }
+        
+        print(f"🔧 EDYCJA CC #{cc_id}:")
+        print(f"   Ticker: {current_cc['ticker']} ({current_cc['contracts']} kontr.)")
+        print(f"   Status: {current_cc['status']}")
+        
+        # Walidacje - czy można edytować
+        if current_cc['status'] != 'open':
+            conn.close()
+            return {
+                'success': False, 
+                'message': f'Nie można edytować zamkniętego CC (status: {current_cc["status"]})'
+            }
+        
+        # Przygotuj pola do aktualizacji
+        allowed_fields = {
+            'strike_usd': 'strike_usd',
+            'expiry_date': 'expiry_date', 
+            'premium_sell_usd': 'premium_sell_usd'
+        }
+        
+        fields_to_update = []
+        values = []
+        changes_log = []
+        
+        for field, db_field in allowed_fields.items():
+            if field in kwargs:
+                new_value = kwargs[field]
+                old_value = current_cc.get(db_field)
+                
+                fields_to_update.append(f"{db_field} = ?")
+                values.append(new_value)
+                changes_log.append(f"{field}: {old_value} → {new_value}")
+                
+                print(f"   🔄 {field}: {old_value} → {new_value}")
+        
+        if not fields_to_update:
+            conn.close()
+            return {'success': False, 'message': 'Brak prawidłowych pól do aktualizacji'}
+        
+        # Jeśli zmieniono premium, przelicz PLN
+        if 'premium_sell_usd' in kwargs:
+            new_premium_usd = kwargs['premium_sell_usd']
+            fx_rate = current_cc['fx_open']  # Używaj oryginalnego kursu z daty otwarcia
+            new_premium_pln = round(new_premium_usd * fx_rate, 2)
+            
+            fields_to_update.append("premium_sell_pln = ?")
+            values.append(new_premium_pln)
+            changes_log.append(f"premium_sell_pln: {current_cc['premium_sell_pln']} → {new_premium_pln}")
+            
+            print(f"   💱 Przeliczono premium PLN: {new_premium_pln} (kurs: {fx_rate})")
+            
+            # Zaktualizuj również powiązane cashflow
+            cursor.execute("""
+                UPDATE cashflows 
+                SET amount_usd = ?, amount_pln = ?
+                WHERE ref_table = 'options_cc' AND ref_id = ?
+            """, (new_premium_usd, new_premium_pln, cc_id))
+            
+            print(f"   💸 Zaktualizowano powiązane cashflow")
+        
+        # Wykonaj aktualizację
+        fields_to_update.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(cc_id)
+        
+        query = f"UPDATE options_cc SET {', '.join(fields_to_update)} WHERE id = ?"
+        cursor.execute(query, values)
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'CC #{cc_id} zaktualizowane pomyślnie',
+            'changes': changes_log
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        return {
+            'success': False,
+            'message': f'Błąd aktualizacji CC #{cc_id}: {str(e)}'
+        }
+
+
+def bulk_delete_covered_calls(cc_ids, confirm_bulk=False):
+    """
+    PUNKT 64: Masowe usuwanie covered calls
+    
+    Args:
+        cc_ids: Lista ID do usunięcia  
+        confirm_bulk: Potwierdzenie operacji masowej
+    
+    Returns:
+        dict: Status operacji z szczegółami
+    """
+    try:
+        if not cc_ids:
+            return {'success': False, 'message': 'Brak CC do usunięcia'}
+        
+        if not confirm_bulk:
+            return {'success': False, 'message': 'Operacja wymaga potwierdzenia'}
+        
+        results = {
+            'success': True,
+            'total_requested': len(cc_ids),
+            'deleted': 0,
+            'failed': 0,
+            'shares_released': {},
+            'errors': []
+        }
+        
+        print(f"🗑️ BULK DELETE: Usuwanie {len(cc_ids)} CC...")
+        
+        for cc_id in cc_ids:
+            delete_result = delete_covered_call(cc_id, confirm_delete=True)
+            
+            if delete_result['success']:
+                results['deleted'] += 1
+                details = delete_result['details']
+                ticker = details['ticker']
+                
+                if ticker in results['shares_released']:
+                    results['shares_released'][ticker] += details['shares_released']
+                else:
+                    results['shares_released'][ticker] = details['shares_released']
+                
+                print(f"   ✅ CC #{cc_id}: {ticker} - OK")
+                
+            else:
+                results['failed'] += 1
+                results['errors'].append(f"CC #{cc_id}: {delete_result['message']}")
+                print(f"   ❌ CC #{cc_id}: {delete_result['message']}")
+        
+        if results['failed'] > 0:
+            results['success'] = False
+            results['message'] = f"Usunięto {results['deleted']}/{results['total_requested']} CC (błędy: {results['failed']})"
+        else:
+            results['message'] = f"Pomyślnie usunięto wszystkie {results['deleted']} CC"
+        
+        return results
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f'Błąd bulk delete: {str(e)}',
+            'deleted': 0,
+            'failed': len(cc_ids)
+        }
+
+
+def get_cc_edit_candidates():
+    """
+    Pobiera CC które można edytować (tylko otwarte)
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, ticker, contracts, strike_usd, premium_sell_usd, premium_sell_pln,
+                   expiry_date, open_date, fx_open
+            FROM options_cc 
+            WHERE status = 'open'
+            ORDER BY open_date DESC
+        """)
+        
+        candidates = []
+        for row in cursor.fetchall():
+            candidates.append({
+                'id': row[0],
+                'ticker': row[1],
+                'contracts': row[2],
+                'strike_usd': row[3],
+                'premium_sell_usd': row[4], 
+                'premium_sell_pln': row[5],
+                'expiry_date': row[6],
+                'open_date': row[7],
+                'fx_open': row[8],
+                'shares_reserved': row[2] * 100
+            })
+        
+        conn.close()
+        return candidates
+        
+    except Exception as e:
+        print(f"Błąd pobierania CC do edycji: {e}")
+        return []
+
+def get_cc_coverage_details(cc_id=None):
+    """
+    PUNKT 66: Pobiera szczegółowe informacje o pokryciu CC przez LOT-y
+    
+    Args:
+        cc_id: Konkretne CC (None = wszystkie otwarte)
+    
+    Returns:
+        list: Szczegółowe informacje o pokryciu FIFO
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        
+        # Pobierz otwarte CC
+        if cc_id:
+            cursor.execute("""
+                SELECT id, ticker, contracts, strike_usd, premium_sell_usd, premium_sell_pln,
+                       open_date, expiry_date, fx_open
+                FROM options_cc 
+                WHERE id = ? AND status = 'open'
+            """, (cc_id,))
+        else:
+            cursor.execute("""
+                SELECT id, ticker, contracts, strike_usd, premium_sell_usd, premium_sell_pln,
+                       open_date, expiry_date, fx_open
+                FROM options_cc 
+                WHERE status = 'open'
+                ORDER BY ticker, open_date
+            """)
+        
+        cc_list = cursor.fetchall()
+        coverage_details = []
+        
+        for cc in cc_list:
+            cc_id, ticker, contracts, strike_usd, premium_sell_usd, premium_sell_pln, open_date, expiry_date, fx_open = cc
+            shares_needed = contracts * 100
+            
+            # Znajdź pokrycie FIFO dla tego CC
+            cursor.execute("""
+                SELECT id, quantity_total, quantity_open, buy_date, buy_price_usd, fx_rate, cost_pln
+                FROM lots 
+                WHERE ticker = ?
+                ORDER BY buy_date, id
+            """, (ticker,))
+            
+            lots = cursor.fetchall()
+            
+            # Symuluj alokację FIFO (tak jak przy sprzedaży CC)
+            lot_allocations = []
+            remaining_to_cover = shares_needed
+            
+            for lot in lots:
+                if remaining_to_cover <= 0:
+                    break
+                
+                lot_id, qty_total, qty_open, buy_date, buy_price_usd, fx_rate, cost_pln = lot
+                qty_reserved = qty_total - qty_open  # Ile z tego LOT-a jest zarezerwowane
+                
+                if qty_reserved > 0:
+                    # Ten LOT ma rezerwacje, sprawdź ile przypada na nasze CC
+                    qty_for_this_cc = min(remaining_to_cover, qty_reserved)
+                    
+                    if qty_for_this_cc > 0:
+                        lot_allocations.append({
+                            'lot_id': lot_id,
+                            'buy_date': buy_date,
+                            'buy_price_usd': buy_price_usd,
+                            'fx_rate': fx_rate,
+                            'cost_per_share_pln': cost_pln / qty_total if qty_total > 0 else 0,
+                            'shares_allocated': qty_for_this_cc,
+                            'total_cost_pln': (cost_pln / qty_total * qty_for_this_cc) if qty_total > 0 else 0
+                        })
+                        
+                        remaining_to_cover -= qty_for_this_cc
+            
+            # Kalkulacje dodatkowe
+            from datetime import datetime, date
+            open_date_obj = datetime.strptime(open_date, '%Y-%m-%d').date() if isinstance(open_date, str) else open_date
+            expiry_date_obj = datetime.strptime(expiry_date, '%Y-%m-%d').date() if isinstance(expiry_date, str) else expiry_date
+            today = date.today()
+            
+            days_to_expiry = (expiry_date_obj - today).days
+            days_held = (today - open_date_obj).days + 1
+            total_days = (expiry_date_obj - open_date_obj).days + 1
+            
+            # Yield calculations
+            total_cost_basis = sum([alloc['total_cost_pln'] for alloc in lot_allocations])
+            premium_yield_pct = (premium_sell_pln / total_cost_basis * 100) if total_cost_basis > 0 else 0
+            annualized_yield_pct = (premium_yield_pct * 365 / total_days) if total_days > 0 else 0
+            
+            coverage_details.append({
+                'cc_id': cc_id,
+                'ticker': ticker,
+                'contracts': contracts,
+                'shares_needed': shares_needed,
+                'strike_usd': strike_usd,
+                'premium_sell_usd': premium_sell_usd,
+                'premium_sell_pln': premium_sell_pln,
+                'open_date': open_date,
+                'expiry_date': expiry_date,
+                'fx_open': fx_open,
+                'days_to_expiry': days_to_expiry,
+                'days_held': days_held,
+                'total_days': total_days,
+                'lot_allocations': lot_allocations,
+                'total_cost_basis': total_cost_basis,
+                'premium_yield_pct': premium_yield_pct,
+                'annualized_yield_pct': annualized_yield_pct
+            })
+        
+        conn.close()
+        return coverage_details
+        
+    except Exception as e:
+        print(f"Błąd get_cc_coverage_details: {e}")
+        return []
+
+
+def get_portfolio_cc_summary():
+    """
+    PUNKT 66: Podsumowanie całego portfela CC
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {}
+        
+        cursor = conn.cursor()
+        
+        # Podstawowe statystyki
+        cursor.execute("SELECT COUNT(*) FROM options_cc WHERE status = 'open'")
+        open_cc_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM options_cc WHERE status != 'open'")
+        closed_cc_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT SUM(contracts) FROM options_cc WHERE status = 'open'")
+        total_open_contracts = cursor.fetchone()[0] or 0
+        
+        cursor.execute("SELECT SUM(premium_sell_pln) FROM options_cc WHERE status = 'open'")
+        total_open_premium_pln = cursor.fetchone()[0] or 0
+        
+        cursor.execute("SELECT SUM(pl_pln) FROM options_cc WHERE status != 'open' AND pl_pln IS NOT NULL")
+        total_realized_pl_pln = cursor.fetchone()[0] or 0
+        
+        # Statystyki per ticker
+        cursor.execute("""
+            SELECT ticker, 
+                   COUNT(*) as cc_count,
+                   SUM(contracts) as total_contracts,
+                   SUM(premium_sell_pln) as total_premium_pln
+            FROM options_cc 
+            WHERE status = 'open'
+            GROUP BY ticker
+            ORDER BY ticker
+        """)
+        
+        ticker_stats = []
+        for row in cursor.fetchall():
+            ticker_stats.append({
+                'ticker': row[0],
+                'cc_count': row[1],
+                'total_contracts': row[2],
+                'shares_reserved': row[2] * 100,
+                'total_premium_pln': row[3]
+            })
+        
+        conn.close()
+        
+        return {
+            'open_cc_count': open_cc_count,
+            'closed_cc_count': closed_cc_count,
+            'total_open_contracts': total_open_contracts,
+            'total_shares_reserved': total_open_contracts * 100,
+            'total_open_premium_pln': total_open_premium_pln,
+            'total_realized_pl_pln': total_realized_pl_pln,
+            'ticker_stats': ticker_stats
+        }
+        
+    except Exception as e:
+        print(f"Błąd get_portfolio_cc_summary: {e}")
+        return {}
+        
+def get_closed_cc_analysis():
+    """
+    PUNKT 67: Szczegółowa analiza zamkniętych CC z P/L
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, ticker, contracts, strike_usd, premium_sell_usd, premium_sell_pln,
+                   premium_buyback_usd, premium_buyback_pln, open_date, close_date, expiry_date,
+                   status, fx_open, fx_close, pl_pln, created_at
+            FROM options_cc 
+            WHERE status IN ('bought_back', 'expired')
+            ORDER BY close_date DESC, ticker
+        """)
+        
+        closed_cc = []
+        
+        for row in cursor.fetchall():
+            cc_data = {
+                'cc_id': row[0],
+                'ticker': row[1],
+                'contracts': row[2],
+                'shares': row[2] * 100,
+                'strike_usd': row[3],
+                'premium_sell_usd': row[4],
+                'premium_sell_pln': row[5],
+                'premium_buyback_usd': row[6] or 0,
+                'premium_buyback_pln': row[7] or 0,
+                'open_date': row[8],
+                'close_date': row[9],
+                'expiry_date': row[10],
+                'status': row[11],
+                'fx_open': row[12],
+                'fx_close': row[13] or row[12],  # Fallback to open rate
+                'pl_pln': row[14] or 0,
+                'created_at': row[15]
+            }
+            
+            # Dodatkowe kalkulacje
+            from datetime import datetime
+            
+            # Konwersja dat
+            open_date_obj = datetime.strptime(cc_data['open_date'], '%Y-%m-%d').date()
+            close_date_obj = datetime.strptime(cc_data['close_date'], '%Y-%m-%d').date() if cc_data['close_date'] else None
+            
+            days_held = (close_date_obj - open_date_obj).days if close_date_obj else 0
+            
+            # P/L analysis
+            if cc_data['status'] == 'expired':
+                # Expired = pełna premium jako zysk
+                net_premium_usd = cc_data['premium_sell_usd']
+                net_premium_pln = cc_data['premium_sell_pln']
+                outcome_emoji = "🏆"
+                outcome_text = "Expired (Max Profit)"
+            else:
+                # Bought back = różnica premium
+                net_premium_usd = cc_data['premium_sell_usd'] - cc_data['premium_buyback_usd']
+                net_premium_pln = cc_data['premium_sell_pln'] - cc_data['premium_buyback_pln']
+                outcome_emoji = "🔄"
+                outcome_text = "Bought Back"
+            
+            # Yield calculations
+            # Oszacuj koszt bazowy (simplified - będziemy to później ulepszyć)
+            estimated_cost_per_share = cc_data['strike_usd'] * cc_data['fx_open']  # Approximation
+            estimated_total_cost = estimated_cost_per_share * cc_data['shares']
+            
+            premium_yield_pct = (net_premium_pln / estimated_total_cost * 100) if estimated_total_cost > 0 else 0
+            annualized_yield_pct = (premium_yield_pct * 365 / days_held) if days_held > 0 else 0
+            
+            cc_data.update({
+                'days_held': days_held,
+                'net_premium_usd': net_premium_usd,
+                'net_premium_pln': net_premium_pln,
+                'outcome_emoji': outcome_emoji,
+                'outcome_text': outcome_text,
+                'estimated_total_cost': estimated_total_cost,
+                'premium_yield_pct': premium_yield_pct,
+                'annualized_yield_pct': annualized_yield_pct
+            })
+            
+            closed_cc.append(cc_data)
+        
+        conn.close()
+        return closed_cc
+        
+    except Exception as e:
+        print(f"Błąd get_closed_cc_analysis: {e}")
+        return []
+
+
+def get_cc_performance_summary():
+    """
+    PUNKT 67: Podsumowanie performance wszystkich CC
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {}
+        
+        cursor = conn.cursor()
+        
+        # Stats dla zamkniętych CC
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_closed,
+                SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) as expired_count,
+                SUM(CASE WHEN status = 'bought_back' THEN 1 ELSE 0 END) as buyback_count,
+                SUM(pl_pln) as total_realized_pl,
+                AVG(pl_pln) as avg_pl_per_cc,
+                MIN(pl_pln) as worst_pl,
+                MAX(pl_pln) as best_pl
+            FROM options_cc 
+            WHERE status IN ('bought_back', 'expired') AND pl_pln IS NOT NULL
+        """)
+        
+        closed_stats = cursor.fetchone()
+        
+        # Stats per ticker
+        cursor.execute("""
+            SELECT ticker,
+                   COUNT(*) as cc_count,
+                   SUM(pl_pln) as total_pl,
+                   AVG(pl_pln) as avg_pl,
+                   SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) as expired_count,
+                   SUM(CASE WHEN status = 'bought_back' THEN 1 ELSE 0 END) as buyback_count
+            FROM options_cc 
+            WHERE status IN ('bought_back', 'expired') AND pl_pln IS NOT NULL
+            GROUP BY ticker
+            ORDER BY total_pl DESC
+        """)
+        
+        ticker_performance = []
+        for row in cursor.fetchall():
+            ticker_performance.append({
+                'ticker': row[0],
+                'cc_count': row[1],
+                'total_pl': row[2],
+                'avg_pl': row[3],
+                'expired_count': row[4],
+                'buyback_count': row[5],
+                'win_rate': (row[4] / row[1] * 100) if row[1] > 0 else 0
+            })
+        
+        conn.close()
+        
+        if closed_stats:
+            return {
+                'total_closed': closed_stats[0] or 0,
+                'expired_count': closed_stats[1] or 0,
+                'buyback_count': closed_stats[2] or 0,
+                'total_realized_pl': closed_stats[3] or 0,
+                'avg_pl_per_cc': closed_stats[4] or 0,
+                'worst_pl': closed_stats[5] or 0,
+                'best_pl': closed_stats[6] or 0,
+                'ticker_performance': ticker_performance
+            }
+        
+        return {}
+        
+    except Exception as e:
+        print(f"Błąd get_cc_performance_summary: {e}")
+        return {}
+
 
 # Test na końcu pliku (opcjonalny)
 if __name__ == "__main__":
