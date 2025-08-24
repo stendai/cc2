@@ -1631,7 +1631,7 @@ def buyback_covered_call(cc_id, buyback_price_usd, buyback_date):
         pl_usd = total_premium_received_usd - total_buyback_usd
         
         # P/L w PLN (dokładne z kursami)
-        premium_received_pln = premium_sell_pln  # Już zapisane w bazie
+        premium_received_pln = premium_sell_pln   # Już zapisane w bazie
         buyback_cost_pln = total_buyback_usd * fx_close
         pl_pln = premium_received_pln - buyback_cost_pln
         

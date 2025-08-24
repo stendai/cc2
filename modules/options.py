@@ -1,16 +1,3 @@
-"""
-Moduł Options - Zarządzanie Covered Calls
-ETAP 4 - PUNKTY 51-56: UKOŃCZONE
-
-FUNKCJONALNOŚCI ETAPU 4:
-- ✅ PUNKT 51: Struktura modułu Options
-- ✅ PUNKT 52: Logika rezerwacji akcji FIFO
-- ✅ PUNKT 53: Formularz sprzedaży CC z walidacją
-- ✅ PUNKT 54: Faktyczny zapis CC do bazy
-- ✅ PUNKT 55: Tabela otwartych CC z alertami expiry
-- ✅ PUNKT 56: Funkcje buyback i expiry CC
-"""
-
 import streamlit as st
 import sys
 import os
@@ -644,7 +631,7 @@ def get_portfolio_cc_summary():
     PUNKT 66: Podsumowanie całego portfela CC
     """
     try:
-        conn = get_connection()
+        conn = db.get_connection()  # ← POPRAWKA: było get_connection()
         if not conn:
             return {}
         
@@ -751,7 +738,7 @@ def show_open_cc_tab():
     with col_metric4:
         st.metric(
             "💰 Premium PLN",
-            f"{portfolio_summary['total_open_premium_pln']:,.0f} zł",
+            f"{portfolio_summary['total_open_premium_pln']:,.2f} zł",
             help="Łączna otrzymana premium"
         )
     
@@ -766,7 +753,7 @@ def show_open_cc_tab():
                 'CC Count': stat['cc_count'],
                 'Kontrakty': stat['total_contracts'],
                 'Akcje': stat['shares_reserved'],
-                'Premium PLN': f"{stat['total_premium_pln']:,.0f} zł"
+                'Premium PLN': f"{stat['total_premium_pln']:,.2f} zł"
             })
         
         st.dataframe(ticker_data, use_container_width=True)
@@ -813,7 +800,7 @@ def show_open_cc_tab():
                 st.markdown("**📊 Parametry CC:**")
                 st.write(f"🎯 **Strike**: ${cc_detail['strike_usd']:.2f}")
                 st.write(f"📦 **Kontrakty**: {cc_detail['contracts']} = {cc_detail['shares_needed']} akcji")
-                st.write(f"💰 **Premium**: ${cc_detail['premium_sell_usd']:.2f} = {cc_detail['premium_sell_pln']:.0f} PLN")
+                st.write(f"💰 **Premium**: ${cc_detail['premium_sell_usd']:.2f} = {cc_detail['premium_sell_pln']:.2f} PLN")
                 st.write(f"💱 **FX Open**: {cc_detail['fx_open']:.4f}")
             
             with col_cc2:
@@ -825,7 +812,7 @@ def show_open_cc_tab():
             
             with col_cc3:
                 st.markdown("**💹 Yield Analysis:**")
-                st.write(f"🏦 **Koszt bazowy**: {cc_detail['total_cost_basis']:,.0f} PLN")
+                st.write(f"🏦 **Koszt bazowy**: {cc_detail['total_cost_basis']:,.2f} PLN")
                 st.write(f"📊 **Premium yield**: {cc_detail['premium_yield_pct']:.2f}%")
                 st.write(f"📈 **Annualized yield**: {cc_detail['annualized_yield_pct']:.1f}%")
                 
@@ -852,7 +839,7 @@ def show_open_cc_tab():
                         'FX Rate': f"{alloc['fx_rate']:.4f}",
                         'Koszt/akcję PLN': f"{alloc['cost_per_share_pln']:.2f} zł",
                         'Akcje pokryte': alloc['shares_allocated'],
-                        'Koszt pokrycia': f"{alloc['total_cost_pln']:.0f} zł"
+                        'Koszt pokrycia': f"{alloc['total_cost_pln']:.2f} zł"
                     })
                 
                 st.dataframe(fifo_data, use_container_width=True)
@@ -884,14 +871,23 @@ def show_open_cc_tab():
         if st.button("📈 Sprzedaj kolejne CC", key="quick_sell_more"):
             st.info("💡 Przejdź do zakładki 'Sprzedaż CC'")
 
+# NAPRAWA w modules/options.py - funkcja show_cc_history_tab()
+
 def show_cc_history_tab():
     """
-    PUNKT 67: Historia CC z zaawansowaną analizą P/L (CLEANUP UI)
+    PUNKT 67 + 68: Historia CC z zaawansowaną analizą P/L + zaawansowane filtry
     """
     st.subheader("📋 Historia Covered Calls")
     
-    # CLEANUP: Usunięto deweloperskie komunikaty
-    # st.success("✅ **PUNKT 57 UKOŃCZONY** - Historia CC z filtrami i eksportem CSV")
+    try:
+        closed_cc_analysis = db.get_closed_cc_analysis()
+    except Exception as e:
+        st.error(f"❌ Błąd pobierania historii CC: {e}")
+        return
+    
+    if not closed_cc_analysis:
+        st.info("📋 **Brak zamkniętych CC** - sprzedaj i zamknij CC aby zobaczyć historię")
+        return
     
     # Performance Summary
     performance = db.get_cc_performance_summary()
@@ -902,21 +898,25 @@ def show_cc_history_tab():
         col_perf1, col_perf2, col_perf3, col_perf4 = st.columns(4)
         
         with col_perf1:
+            total_pl = performance.get('total_realized_pl', 0) or 0
             st.metric(
                 "💰 Total P/L",
-                f"{performance['total_realized_pl']:,.0f} PLN",
+                f"{total_pl:.2f} PLN",  # PUNKT 68: Dokładne wartości
                 help="Łączny zrealizowany P/L"
             )
         
         with col_perf2:
+            avg_pl = performance.get('avg_pl_per_cc', 0) or 0
             st.metric(
                 "📈 Avg per CC",
-                f"{performance['avg_pl_per_cc']:,.0f} PLN",
+                f"{avg_pl:.2f} PLN",  # PUNKT 68: Dokładne wartości
                 help="Średni P/L na pozycję"
             )
         
         with col_perf3:
-            win_rate = (performance['expired_count'] / performance['total_closed'] * 100) if performance['total_closed'] > 0 else 0
+            total_closed = performance.get('total_closed', 0) or 0
+            expired_count = performance.get('expired_count', 0) or 0
+            win_rate = (expired_count / total_closed * 100) if total_closed > 0 else 0
             st.metric(
                 "🏆 Win Rate",
                 f"{win_rate:.1f}%",
@@ -924,114 +924,195 @@ def show_cc_history_tab():
             )
         
         with col_perf4:
+            buyback_count = performance.get('buyback_count', 0) or 0
             st.metric(
                 "📝 Total Closed",
-                f"{performance['total_closed']}",
-                help=f"Expired: {performance['expired_count']}, Bought back: {performance['buyback_count']}"
+                f"{total_closed}",
+                help=f"Expired: {expired_count}, Bought back: {buyback_count}"
             )
         
         # Performance per ticker
-        if performance['ticker_performance']:
+        ticker_performance = performance.get('ticker_performance', [])
+        if ticker_performance:
             st.markdown("### 🎯 Performance per ticker")
             
             ticker_data = []
-            for ticker_perf in performance['ticker_performance']:
+            for ticker_perf in ticker_performance:
                 ticker_data.append({
-                    'Ticker': ticker_perf['ticker'],
-                    'CC Count': ticker_perf['cc_count'],
-                    'Total P/L': f"{ticker_perf['total_pl']:,.0f} PLN",
-                    'Avg P/L': f"{ticker_perf['avg_pl']:,.0f} PLN",
-                    'Win Rate': f"{ticker_perf['win_rate']:.1f}%",
-                    'Expired': ticker_perf['expired_count'],
-                    'Bought Back': ticker_perf['buyback_count']
+                    'Ticker': ticker_perf.get('ticker', 'N/A'),
+                    'CC Count': ticker_perf.get('cc_count', 0),
+                    'Total P/L': f"{ticker_perf.get('total_pl', 0):,.2f} PLN",
+                    'Avg P/L': f"{ticker_perf.get('avg_pl', 0):,.2f} PLN", 
+                    'Win Rate': f"{ticker_perf.get('win_rate', 0):.1f}%",
+                    'Expired': ticker_perf.get('expired_count', 0),
+                    'Bought Back': ticker_perf.get('buyback_count', 0)
                 })
             
             st.dataframe(ticker_data, use_container_width=True)
     
-    # Szczegółowa historia
-    st.markdown("### 📋 Detailed History")
+    # PUNKT 68: FILTRY
+    st.markdown("### 🔍 Filtry")
     
-    closed_cc_analysis = db.get_closed_cc_analysis()
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
     
-    if not closed_cc_analysis:
-        st.info("📝 **Brak zamkniętych CC**")
-        st.markdown("*Historia pojawi się po buyback lub expiry pierwszych opcji*")
-        return
-    
-    # CLEANUP: Uproszczone filtry (bez zbędnych expander-ów)
-    col_filter1, col_filter2, col_filter3 = st.columns(3)
-    
-    with col_filter1:
-        all_tickers = sorted(list(set([cc['ticker'] for cc in closed_cc_analysis])))
+    with col_f1:
+        all_tickers = list(set([cc['ticker'] for cc in closed_cc_analysis]))
         selected_tickers = st.multiselect(
-            "Filtry - Tickery:",
+            "Tickery:",
             options=all_tickers,
             default=all_tickers,
-            key="history_ticker_filter"
+            key="history_ticker_filter_68"
         )
     
-    with col_filter2:
+    with col_f2:
         status_filter = st.selectbox(
             "Status:",
-            options=["Wszystkie", "Expired", "Bought back"],
-            key="history_status_filter"
+            ["Wszystkie", "Expired", "Bought back"],
+            key="history_status_filter_68"
         )
     
-    with col_filter3:
-        sort_options = ["Date ↓", "P/L ↓", "Yield ↓", "Ticker A-Z"]
+    with col_f3:
+        sort_options = [
+            "Data ↓", "Data ↑", 
+            "P/L ↓", "P/L ↑",
+            "Yield ↓", "Yield ↑",
+            "Premium ↓", "Premium ↑",
+            "Ticker A-Z"
+        ]
         sort_by = st.selectbox(
             "Sortowanie:",
             options=sort_options,
-            key="history_sort_filter"
+            key="history_sort_filter_68"
         )
     
-    # Aplikuj filtry
+    with col_f4:
+        if st.button("🔄 Reset", key="reset_filters_68"):
+            st.rerun()
+    
+    # Zaawansowane filtry
+    with st.expander("⚙️ Filtry zaawansowane", expanded=False):
+        col_af1, col_af2 = st.columns(2)
+        
+        with col_af1:
+            st.markdown("**📅 Zakres dat:**")
+            
+            from datetime import datetime
+            all_dates = []
+            for cc in closed_cc_analysis:
+                if 'close_date' in cc and cc['close_date']:
+                    try:
+                        cc_date = datetime.strptime(cc['close_date'], '%Y-%m-%d').date()
+                        all_dates.append(cc_date)
+                    except:
+                        pass
+            
+            if all_dates:
+                min_date = min(all_dates)
+                max_date = max(all_dates)
+                
+                date_from = st.date_input("Od:", value=min_date, key="date_from_68")
+                date_to = st.date_input("Do:", value=max_date, key="date_to_68")
+            else:
+                date_from = None
+                date_to = None
+                st.info("Brak dat do filtrowania")
+        
+        with col_af2:
+            st.markdown("**💰 Zakresy kwot:**")
+            
+            all_pl = [cc.get('pl_pln', 0) for cc in closed_cc_analysis if 'pl_pln' in cc]
+            if all_pl:
+                min_pl = min(all_pl)
+                max_pl = max(all_pl)
+                
+                min_pl_slider = int(min_pl - 1) if min_pl >= 0 else int(min_pl - abs(min_pl * 0.1) - 1)
+                max_pl_slider = int(max_pl + 2)
+                
+                pl_range = st.slider(
+                    "P/L PLN:",
+                    min_value=min_pl_slider,
+                    max_value=max_pl_slider,
+                    value=(int(min_pl), int(max_pl) + 1),
+                    step=1,
+                    key="pl_range_68",
+                    help=f"Rzeczywisty zakres: {min_pl:.2f} - {max_pl:.2f} PLN"
+                )
+                
+                st.caption(f"💡 Rzeczywiste P/L: {min_pl:.2f} do {max_pl:.2f} PLN")
+            else:
+                pl_range = None
+                st.info("Brak danych P/L")
+    
+    # Aplikowanie filtrów
     filtered_cc = []
     for cc in closed_cc_analysis:
-        # Filtr ticker
         if cc['ticker'] not in selected_tickers:
             continue
         
-        # Filtr status
         if status_filter != "Wszystkie":
-            if status_filter == "Expired" and cc['status'] != 'expired':
+            if status_filter == "Expired" and cc.get('status') != 'expired':
                 continue
-            elif status_filter == "Bought back" and cc['status'] != 'bought_back':
+            elif status_filter == "Bought back" and cc.get('status') != 'bought_back':
+                continue
+        
+        if date_from and date_to and 'close_date' in cc:
+            try:
+                cc_date = datetime.strptime(cc['close_date'], '%Y-%m-%d').date()
+                if cc_date < date_from or cc_date > date_to:
+                    continue
+            except:
+                pass
+        
+        if pl_range and 'pl_pln' in cc:
+            if cc['pl_pln'] < pl_range[0] or cc['pl_pln'] > pl_range[1]:
                 continue
         
         filtered_cc.append(cc)
     
     # Sortowanie
-    if sort_by == "Date ↓":
-        filtered_cc.sort(key=lambda x: x['close_date'], reverse=True)
+    if sort_by == "Data ↓":
+        filtered_cc.sort(key=lambda x: x.get('close_date', ''), reverse=True)
+    elif sort_by == "Data ↑":
+        filtered_cc.sort(key=lambda x: x.get('close_date', ''))
     elif sort_by == "P/L ↓":
-        filtered_cc.sort(key=lambda x: x['pl_pln'], reverse=True)
+        filtered_cc.sort(key=lambda x: x.get('pl_pln', 0), reverse=True)
+    elif sort_by == "P/L ↑":
+        filtered_cc.sort(key=lambda x: x.get('pl_pln', 0))
     elif sort_by == "Yield ↓":
-        filtered_cc.sort(key=lambda x: x['annualized_yield_pct'], reverse=True)
+        filtered_cc.sort(key=lambda x: x.get('annualized_yield_pct', 0), reverse=True)
+    elif sort_by == "Yield ↑":
+        filtered_cc.sort(key=lambda x: x.get('annualized_yield_pct', 0))
+    elif sort_by == "Premium ↓":
+        filtered_cc.sort(key=lambda x: x.get('premium_sell_usd', 0), reverse=True)
+    elif sort_by == "Premium ↑":
+        filtered_cc.sort(key=lambda x: x.get('premium_sell_usd', 0))
     elif sort_by == "Ticker A-Z":
-        filtered_cc.sort(key=lambda x: x['ticker'])
+        filtered_cc.sort(key=lambda x: x.get('ticker', ''))
     
     if not filtered_cc:
         st.warning("⚠️ Brak CC po zastosowaniu filtrów")
         return
     
-    # Tabela szczegółowa
-    st.write(f"**Wyniki:** {len(filtered_cc)} z {len(closed_cc_analysis)} CC")
+    # Wyniki
+    st.write(f"**Wyniki:** {len(filtered_cc)} z {len(closed_cc_analysis)} zamkniętych CC")
     
+    # Szczegółowa tabela
     for cc in filtered_cc:
-        # Color coding based on P/L
-        if cc['pl_pln'] > 0:
+        pl_pln = cc.get('pl_pln', 0)
+        if pl_pln > 0:
             pl_emoji = "💚"
-            pl_color = "success"
-        elif cc['pl_pln'] < 0:
+        elif pl_pln < 0:
             pl_emoji = "❤️"
-            pl_color = "error"
         else:
             pl_emoji = "⚪"
-            pl_color = "info"
+        
+        outcome_emoji = cc.get('outcome_emoji', '📋')
+        ticker = cc.get('ticker', 'N/A')
+        cc_id = cc.get('id', 'N/A')
+        annualized_yield = cc.get('annualized_yield_pct', 0)
         
         with st.expander(
-            f"{cc['outcome_emoji']} {pl_emoji} CC #{cc['cc_id']} - {cc['ticker']} - {cc['pl_pln']:+,.0f} PLN ({cc['annualized_yield_pct']:+.1f}% p.a.)",
+            f"{outcome_emoji} {pl_emoji} CC #{cc_id} - {ticker} - {pl_pln:+,.2f} PLN ({annualized_yield:+.1f}% p.a.)",
             expanded=False
         ):
             
@@ -1039,96 +1120,26 @@ def show_cc_history_tab():
             
             with col_detail1:
                 st.markdown("**📊 Podstawowe info:**")
-                st.write(f"🎯 **Ticker**: {cc['ticker']} ({cc['contracts']} kontr.)")
-                st.write(f"💰 **Strike**: ${cc['strike_usd']:.2f}")
-                st.write(f"📅 **Opened**: {cc['open_date']}")
-                st.write(f"📅 **Closed**: {cc['close_date']}")
-                st.write(f"⏱️ **Days held**: {cc['days_held']}")
-                st.write(f"🏷️ **Status**: {cc['outcome_text']}")
+                st.write(f"🎯 **Ticker**: {ticker} ({cc.get('contracts', 'N/A')} kontr.)")
+                st.write(f"💰 **Strike**: ${cc.get('strike_usd', 0):.2f}")
+                st.write(f"📅 **Okres**: {cc.get('open_date', 'N/A')} → {cc.get('close_date', 'N/A')}")
             
             with col_detail2:
-                st.markdown("**💸 Premium Analysis:**")
-                st.write(f"📈 **Sell Premium**: ${cc['premium_sell_usd']:.2f} = {cc['premium_sell_pln']:.0f} PLN")
-                if cc['premium_buyback_usd'] > 0:
-                    st.write(f"📉 **Buyback Premium**: ${cc['premium_buyback_usd']:.2f} = {cc['premium_buyback_pln']:.0f} PLN")
-                st.write(f"💰 **Net Premium**: ${cc['net_premium_usd']:.2f} = {cc['net_premium_pln']:.0f} PLN")
-                st.write(f"💱 **FX Open**: {cc['fx_open']:.4f}")
-                if cc['fx_close'] != cc['fx_open']:
-                    st.write(f"💱 **FX Close**: {cc['fx_close']:.4f}")
+                st.markdown("**💵 Finansowe:**")
+                st.write(f"💲 **Premium sprzedaż**: ${cc.get('premium_sell_usd', 0):.2f}")
+                if cc.get('premium_buyback_usd', 0) > 0:
+                    st.write(f"💸 **Premium buyback**: ${cc.get('premium_buyback_usd', 0):.2f}")
+                st.write(f"💰 **P/L PLN**: {pl_pln:+,.2f}")
             
             with col_detail3:
                 st.markdown("**📈 Performance:**")
-                
-                # P/L display with color
-                if cc['pl_pln'] > 0:
-                    st.success(f"💚 **P/L**: +{cc['pl_pln']:.0f} PLN")
-                elif cc['pl_pln'] < 0:
-                    st.error(f"❤️ **P/L**: {cc['pl_pln']:.0f} PLN")
-                else:
-                    st.info(f"⚪ **P/L**: {cc['pl_pln']:.0f} PLN")
-                
-                st.write(f"📊 **Premium Yield**: {cc['premium_yield_pct']:.2f}%")
-                st.write(f"📅 **Annualized**: {cc['annualized_yield_pct']:.1f}% p.a.")
-                
-                # Performance rating
-                if cc['annualized_yield_pct'] >= 20:
-                    st.success("🚀 Excellent")
-                elif cc['annualized_yield_pct'] >= 12:
-                    st.info("✅ Good")
-                elif cc['annualized_yield_pct'] >= 8:
-                    st.warning("⚠️ OK")
-                else:
-                    st.error("❌ Poor")
+                st.write(f"📊 **Status**: {cc.get('outcome_text', cc.get('status', 'N/A'))}")
+                st.write(f"🎯 **Dni trzymania**: {cc.get('days_held', 0)}")
+                st.write(f"📈 **Yield p.a.**: {annualized_yield:.1f}%")
     
-    # Export functionality
-    st.markdown("---")
-    col_export1, col_export2 = st.columns(2)
-    
-    with col_export1:
-        if st.button("📊 Export do CSV", key="export_history"):
-            # Przygotuj dane do eksportu
-            export_data = []
-            for cc in filtered_cc:
-                export_data.append({
-                    'CC_ID': cc['cc_id'],
-                    'Ticker': cc['ticker'],
-                    'Contracts': cc['contracts'],
-                    'Strike_USD': cc['strike_usd'],
-                    'Premium_Sell_USD': cc['premium_sell_usd'],
-                    'Premium_Sell_PLN': cc['premium_sell_pln'],
-                    'Premium_Buyback_USD': cc['premium_buyback_usd'],
-                    'Premium_Buyback_PLN': cc['premium_buyback_pln'],
-                    'Net_Premium_PLN': cc['net_premium_pln'],
-                    'P/L_PLN': cc['pl_pln'],
-                    'Open_Date': cc['open_date'],
-                    'Close_Date': cc['close_date'],
-                    'Days_Held': cc['days_held'],
-                    'Status': cc['status'],
-                    'Premium_Yield_%': round(cc['premium_yield_pct'], 2),
-                    'Annualized_Yield_%': round(cc['annualized_yield_pct'], 1),
-                    'FX_Open': cc['fx_open'],
-                    'FX_Close': cc['fx_close']
-                })
-            
-            import pandas as pd
-            df = pd.DataFrame(export_data)
-            csv = df.to_csv(index=False)
-            
-            from datetime import datetime
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            
-            st.download_button(
-                label="💾 Pobierz CSV",
-                data=csv,
-                file_name=f"cc_history_{timestamp}.csv",
-                mime="text/csv",
-                key="download_history_csv"
-            )
-    
-    with col_export2:
-        st.info(f"📋 **{len(filtered_cc)} CC** ready to export")
-
-    
+    # Export CSV
+    if st.button("📥 Eksport CSV", key="export_history_csv"):
+        st.info("💡 **PUNKT 69** - Eksporty CSV będą dostępne w następnej wersji")
 
 # Test funkcjonalności (opcjonalny)
 def test_options_prerequisites():

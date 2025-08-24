@@ -156,11 +156,12 @@
    - ✅ Export do CSV z wszystkimi metrykami
    - ✅ **UI CLEANUP** - usunięto wszystkie deweloperskie komunikaty i info boxy
    - ✅ **Profesjonalizacja interfejsu** - czytelne tabele, uproszczone filtry
+   - ✅ Dodanie filtrów zaawansowanych (zakresy dat, kwoty P/L) + **FINALNE USUWANIE INFO DEWELOPERSKICH**
 
-### Punkty 68-70: Options - finalizacja ETAPU 4 ⏳ **OSTATNIE 3 PUNKTY**
-68. ⏳ Dodanie filtrów zaawansowanych (zakresy dat, kwoty P/L) + **FINALNE USUWANIE INFO DEWELOPERSKICH**
-69. ⏳ Implementacja kompletnych eksportów options do CSV + **NARZĘDZIA CLEANUP**
-70. ⏳ Testowanie pełnej funkcjonalności modułu options + **FINALIZACJA PROFESJONALNEGO UI**
+### Punkty 69-70: Finalizacja ETAPU 4 ⏳ **OSTATNIE 2 PUNKTY**
+68. ⏳ Utworzenie oddzielnego modułu do przeniesienia opcji deweloperskich i testowych z każdego modułu
+69. ⏳ Sprawdzanie po kolei wszystkich modułów i przeniesienie opcji testowych i deweloperskich do modułu testowego **NARZĘDZIA CLEANUP**
+70. ⏳ Testowanie pełnej funkcjonalności modułu testowego + oczyszczenie dashboardu + **FINALIZACJA PROFESJONALNEGO UI**
 
 **Status ETAP 4**: 🔥 **67/70 ukończone (96%)** - Options prawie gotowe! Zostały tylko 3 punkty!
 
