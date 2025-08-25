@@ -368,6 +368,108 @@ def show_dev_tools():
                 st.error(f"❌ Błąd generowania CC: {e}")
 
     # === SEKCJA 4: NARZĘDZIA EKSPORT/IMPORT ===
+        # === SEKCJA 4A: CZĘŚCIOWY BUYBACK SETUP ===
+    with st.expander("🎯 Częściowy Buyback Setup", expanded=True):
+        st.markdown("### 🎯 Konfiguracja częściowego buyback")
+        
+        # SPRAWDŹ STATUS MAPOWAŃ
+        try:
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cc_lot_mappings'")
+            has_mappings_table = cursor.fetchone() is not None
+            conn.close()
+        except:
+            has_mappings_table = False
+        
+        # STATUS DISPLAY
+        col_status1, col_status2 = st.columns(2)
+        
+        with col_status1:
+            if has_mappings_table:
+                st.success("✅ **Tabela mapowań:** cc_lot_mappings istnieje")
+                
+                # Sprawdź spójność mapowań
+                try:
+                    diag = db.get_reservations_diagnostics()
+                    if diag.get('success'):
+                        ccs_data = diag.get('ccs', [])
+                        if ccs_data:
+                            consistent_count = sum(1 for cc in ccs_data 
+                                                 if cc.get('mapped_reserved') == cc.get('expected_reserved'))
+                            total_ccs = len(ccs_data)
+                            
+                            if consistent_count == total_ccs:
+                                st.success(f"✅ **Mapowania spójne:** {total_ccs}/{total_ccs} CC")
+                            else:
+                                st.warning(f"⚠️ **Niespójne:** {consistent_count}/{total_ccs} CC")
+                        else:
+                            st.info("ℹ️ Brak otwartych CC do sprawdzenia")
+                    else:
+                        st.warning("⚠️ Nie można sprawdzić spójności")
+                except Exception as e:
+                    st.warning(f"⚠️ Błąd sprawdzania: {e}")
+            else:
+                st.error("❌ **Tabela mapowań:** brak cc_lot_mappings")
+                st.info("Częściowy buyback NIEDOSTĘPNY")
+        
+        with col_status2:
+            # FUNKCJONALNOŚĆ DISPLAY
+            if has_mappings_table:
+                st.info("🎯 **Dostępne funkcje:**")
+                st.write("• Częściowy buyback kontraktów")
+                st.write("• Podgląd mapowań LOT-ów")
+                st.write("• Diagnostyka rezerwacji")
+            else:
+                st.warning("🔒 **Ograniczone funkcje:**")
+                st.write("• Tylko pełny buyback")
+                st.write("• Brak mapowań LOT-ów")
+                st.write("• Podstawowa diagnostyka")
+        
+        # AKCJE SETUP
+        st.markdown("---")
+        col_action1, col_action2 = st.columns(2)
+        
+        with col_action1:
+            if not has_mappings_table:
+                if st.button("🔧 Utwórz tabelę mapowań", key="create_mappings_table", type="primary"):
+                    try:
+                        if db.create_cc_reservations_mapping_table():
+                            st.success("✅ Tabela cc_lot_mappings utworzona!")
+                            st.info("👉 Teraz kliknij 'Odbuduj mapowania'")
+                            st.rerun()
+                        else:
+                            st.error("❌ Błąd tworzenia tabeli")
+                    except Exception as e:
+                        st.error(f"❌ Błąd: {e}")
+            else:
+                st.success("✅ Tabela już istnieje")
+        
+        with col_action2:
+            if has_mappings_table:
+                if st.button("🔄 Odbuduj mapowania", key="rebuild_all_mappings", type="secondary"):
+                    try:
+                        result = db.rebuild_cc_mappings_from_existing_data()
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.info("🎯 Częściowy buyback jest teraz dostępny!")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {result['message']}")
+                    except Exception as e:
+                        st.error(f"❌ Błąd odbudowy: {e}")
+            else:
+                st.info("ℹ️ Najpierw utwórz tabelę")
+        
+        # INSTRUKCJE
+        st.markdown("---")
+        st.info("""
+        **📋 Instrukcje:**
+        1. **Utwórz tabelę mapowań** - dodaje tabelę cc_lot_mappings
+        2. **Odbuduj mapowania** - tworzy mapowania dla istniejących CC
+        3. **Przejdź do Options → Buyback** - częściowy buyback będzie dostępny
+        4. **Nowe CC** automatycznie tworzą mapowania
+        """)
     with st.expander("📦 Export/Import", expanded=False):
         st.markdown("### 📦 Export/Import Danych")
         
@@ -522,6 +624,35 @@ def show_dev_tools():
             st.error(f"❌ Błąd monitoringu: {e}")
 
     # === SEKCJA 6: QUICK ACTIONS ===
+    
+    with st.expander("🔬 Zaawansowana Diagnostyka", expanded=False):
+        st.markdown("### 🔬 Zaawansowana Diagnostyka")
+        
+        # WYWOŁAJ FUNKCJĘ show_reservations_diagnostics_tab() JAKO SEKCJĘ
+        col_adv1, col_adv2 = st.columns(2)
+        
+        with col_adv1:
+            if st.button("🔍 Pełna diagnostyka rezerwacji", key="full_reservations_diag"):
+                st.markdown("---")
+                # WYWOŁAJ FUNKCJĘ DIAGNOSTYKI
+                show_reservations_diagnostics_tab()
+        
+        with col_adv2:
+            if st.button("🔧 Sprawdź integralność CC-Cashflow", key="check_cc_cashflow"):
+                try:
+                    integrity = db.check_cc_cashflow_integrity()
+                    
+                    if integrity['issues']:
+                        st.warning(f"⚠️ Znaleziono {len(integrity['issues'])} problemów:")
+                        for issue in integrity['issues']:
+                            st.write(f"• {issue}")
+                    else:
+                        st.success("✅ Integralność CC-Cashflow OK")
+                        
+                except Exception as e:
+                    st.error(f"❌ Błąd sprawdzania integralności: {e}")
+
+
     st.markdown("---")
     st.markdown("### ⚡ Quick Actions")
     
@@ -564,6 +695,102 @@ def show_dev_tools():
                 st.error(f"❌ Błąd: {e}")
 
     # === FOOTER ===
+        # === SEKCJA 7: OPERACJE BAZODANOWE ===
+    with st.expander("🗄️ Operacje Bazodanowe", expanded=False):
+        st.markdown("### 🗄️ Zaawansowane operacje na bazie")
+        
+        col_db1, col_db2, col_db3 = st.columns(3)
+        
+        with col_db1:
+            st.markdown("#### 📊 Struktura")
+            if st.button("📋 Sprawdź strukturę tabel", key="check_db_structure"):
+                try:
+                    conn = db.get_connection()
+                    cursor = conn.cursor()
+                    
+                    cursor.execute("""
+                        SELECT name FROM sqlite_master 
+                        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                        ORDER BY name
+                    """)
+                    
+                    tables = [row[0] for row in cursor.fetchall()]
+                    
+                    st.success(f"✅ **{len(tables)} tabel w bazie:**")
+                    for table in tables:
+                        cursor.execute(f"PRAGMA table_info({table})")
+                        columns = cursor.fetchall()
+                        st.write(f"📋 **{table}**: {len(columns)} kolumn")
+                    
+                    conn.close()
+                    
+                except Exception as e:
+                    st.error(f"❌ Błąd: {e}")
+        
+        with col_db2:
+            st.markdown("#### 🔍 SQL Query")
+            
+            custom_query = st.text_area(
+                "Wykonaj custom SQL:",
+                placeholder="SELECT * FROM options_cc LIMIT 5;",
+                key="custom_sql"
+            )
+            
+            if st.button("▶️ Wykonaj SQL", key="execute_sql"):
+                if custom_query.strip():
+                    try:
+                        conn = db.get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(custom_query)
+                        
+                        if custom_query.strip().upper().startswith('SELECT'):
+                            results = cursor.fetchall()
+                            if results:
+                                # Pobierz nazwy kolumn
+                                columns = [desc[0] for desc in cursor.description]
+                                df = pd.DataFrame(results, columns=columns)
+                                st.dataframe(df, use_container_width=True)
+                            else:
+                                st.info("Brak wyników")
+                        else:
+                            conn.commit()
+                            st.success(f"✅ Wykonano - affected rows: {cursor.rowcount}")
+                        
+                        conn.close()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Błąd SQL: {e}")
+                else:
+                    st.warning("Wprowadź zapytanie SQL")
+        
+        with col_db3:
+            st.markdown("#### 💾 Backup")
+            
+            if st.button("💾 Utwórz backup", key="create_backup"):
+                try:
+                    import shutil
+                    from datetime import datetime
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_name = f"portfolio_backup_{timestamp}.db"
+                    
+                    shutil.copy2("portfolio.db", backup_name)
+                    st.success(f"✅ Backup utworzony: {backup_name}")
+                    
+                except Exception as e:
+                    st.error(f"❌ Błąd backup: {e}")
+            
+            st.markdown("**Restore:**")
+            uploaded_backup = st.file_uploader(
+                "Przywróć z backup:",
+                type=['db'],
+                key="restore_backup"
+            )
+            
+            if uploaded_backup and st.button("🔄 Przywróć backup", key="restore_db"):
+                st.warning("⚠️ Funkcja restore nie zaimplementowana - użyj ręcznie")
+                
+                
     st.markdown("---")
     st.success("✅ **PUNKT 68 UKOŃCZONY** - Moduł deweloperski utworzony!")
     st.markdown("*Następny krok: PUNKT 69 - Przeniesienie opcji deweloperskich z innych modułów*")
@@ -649,6 +876,104 @@ def show_cleanup_tools():
                         st.error(f"❌ {result['message']}")
             else:
                 st.success("✅ Brak orphaned cashflow")
+
+def show_reservations_diagnostics_tab():
+    """
+    ROZSZERZONA Diagnostyka z możliwością włączenia częściowego buyback
+    """
+    st.subheader("🛠️ Diagnostyka rezerwacji CC")
+    
+    # SPRAWDŹ STATUS SYSTEMU MAPOWAŃ
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cc_lot_mappings'")
+        has_mappings_table = cursor.fetchone() is not None
+        conn.close()
+    except:
+        has_mappings_table = False
+    
+    # STATUS CZĘŚCIOWEGO BUYBACK
+    st.markdown("### 🎯 Status częściowego buyback")
+    
+    if has_mappings_table:
+        st.success("✅ **Częściowy buyback DOSTĘPNY** - tabela mapowań istnieje")
+        
+        # Sprawdź czy mapowania są aktualne
+        try:
+            diag = db.get_reservations_diagnostics()
+            if diag.get('success'):
+                consistent_mappings = all(cc['delta'] == 0 for cc in diag.get('ccs', []))
+                
+                if consistent_mappings:
+                    st.success("✅ **Mapowania spójne** - częściowy buyback gotowy")
+                else:
+                    st.warning("⚠️ **Mapowania niespójne** - zaleca odbudowę")
+                    
+                    if st.button("🔄 Odbuduj mapowania CC", key="rebuild_mappings"):
+                        result = db.rebuild_cc_mappings_from_existing_data()
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {result['message']}")
+        except:
+            st.warning("⚠️ Nie można sprawdzić spójności mapowań")
+    
+    else:
+        st.error("❌ **Częściowy buyback NIEDOSTĘPNY** - brak tabeli mapowań")
+        
+        st.info("""
+        **Aby włączyć częściowy buyback:**
+        1. Utwórz tabelę mapowań LOT-ów
+        2. Odbuduj mapowania dla istniejących CC
+        3. Nowe CC będą automatycznie tworzyć mapowania
+        """)
+        
+        col_setup1, col_setup2 = st.columns(2)
+        
+        with col_setup1:
+            if st.button("🔧 Utwórz tabelę mapowań", key="create_mappings_table", type="primary"):
+                if db.create_cc_reservations_mapping_table():
+                    st.success("✅ Tabela mapowań utworzona!")
+                    st.rerun()
+                else:
+                    st.error("❌ Błąd tworzenia tabeli")
+        
+        with col_setup2:
+            if has_mappings_table and st.button("🔄 Odbuduj mapowania", key="rebuild_all_mappings"):
+                result = db.rebuild_cc_mappings_from_existing_data()
+                if result['success']:
+                    st.success(f"✅ {result['message']}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {result['message']}")
+    
+    # RESZTA DIAGNOSTYKI (bez zmian)
+    st.markdown("---")
+    st.markdown("### 📊 Diagnostyka podstawowa")
+    
+    try:
+        lots_stats = db.get_lots_stats()
+        cc_stats = db.get_cc_reservations_summary()
+        
+        col_diag1, col_diag2, col_diag3 = st.columns(3)
+        
+        with col_diag1:
+            st.metric("📦 LOT-y akcji", f"{lots_stats.get('total_lots', 0)}")
+            st.metric("📈 Otwarte akcje", f"{lots_stats.get('open_shares', 0)}")
+        
+        with col_diag2:
+            st.metric("🎯 Otwarte CC", f"{cc_stats.get('open_cc_count', 0)}")
+            st.metric("🔒 Zarezerwowane akcje", f"{cc_stats.get('shares_reserved', 0)}")
+        
+        with col_diag3:
+            available_for_new_cc = lots_stats.get('open_shares', 0)
+            st.metric("🆕 Dostępne do CC", f"{available_for_new_cc}")
+            st.metric("📊 Status", "✅ OK" if available_for_new_cc >= 0 else "❌ Problem")
+    
+    except Exception as e:
+        st.error(f"❌ Błąd diagnostyki: {e}")
 
 if __name__ == "__main__":
     show_dev_tools()

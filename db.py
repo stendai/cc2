@@ -3543,24 +3543,12 @@ def check_cc_cashflow_integrity():
     except Exception as e:
         return {'issues': [f'Błąd sprawdzania integralności: {str(e)}']}
         
-def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd, buyback_date):
+def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd, buyback_date, broker_fee_usd=0.0, reg_fee_usd=0.0):
     """
-    🆕 NOWA FUNKCJA: Częściowy buyback CC z podziałem pozycji
+    🔧 NAPRAWIONA: Częściowy buyback CC - BEZ TABELI lot_reservations
     
-    Logika:
-    - Jeśli buyback < całość: zostaw oryginalną CC z mniejszą liczbą kontraktów
-    - Stwórz nowy rekord CC dla odkupionej części (status='bought_back')
-    - Zwolnij proporcjonalną ilość akcji
-    - Utwórz cashflow dla buyback
-    
-    Args:
-        cc_id: ID oryginalnej CC
-        contracts_to_buyback: Ile kontraktów odkupić (1-N)
-        buyback_price_usd: Cena buyback za akcję  
-        buyback_date: Data buyback
-    
-    Returns:
-        dict: Status operacji z szczegółami
+    KLUCZOWA ZMIANA: System rezerwacji działa poprzez quantity_open w lots,
+    nie przez osobną tabelę lot_reservations!
     """
     try:
         conn = get_connection()
@@ -3572,7 +3560,7 @@ def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd,
         # 1. POBIERZ DANE ORYGINALNEJ CC
         cursor.execute("""
             SELECT id, ticker, contracts, strike_usd, premium_sell_usd, 
-                   open_date, expiry_date, fx_open, premium_sell_pln
+                   open_date, expiry_date, status, fx_open, premium_sell_pln
             FROM options_cc 
             WHERE id = ? AND status = 'open'
         """, (cc_id,))
@@ -3582,188 +3570,145 @@ def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd,
             conn.close()
             return {'success': False, 'message': f'CC #{cc_id} nie znalezione lub już zamknięte'}
         
-        (orig_id, ticker, total_contracts, strike_usd, premium_sell_usd, 
-         open_date, expiry_date, fx_open, premium_sell_pln) = cc_record
+        cc_id, ticker, total_contracts, strike_usd, premium_sell_usd, open_date, expiry_date, status, fx_open, premium_sell_pln = cc_record
         
-        # 2. WALIDACJA
+        # 2. WALIDACJA PARAMETRÓW
         if contracts_to_buyback <= 0:
             conn.close()
-            return {'success': False, 'message': 'Liczba kontraktów musi być > 0'}
+            return {'success': False, 'message': 'Liczba kontraktów do odkupu musi być > 0'}
         
         if contracts_to_buyback > total_contracts:
             conn.close()
-            return {'success': False, 'message': f'Nie można odkupić {contracts_to_buyback} z {total_contracts} kontraktów'}
+            return {'success': False, 'message': f'Nie można odkupić {contracts_to_buyback} kontraktów (dostępne: {total_contracts})'}
         
-        # 3. POBIERZ KURS NBP dla buyback
-        fx_result = get_fx_rate_for_date(buyback_date)
-        if isinstance(fx_result, dict):
-            fx_close = fx_result['rate']
-            fx_close_date = fx_result['date']
-        else:
-            fx_close = float(fx_result) if fx_result else 4.0
-            fx_close_date = buyback_date
-        
-        # 4. KALKULACJE
-        shares_to_buyback = contracts_to_buyback * 100
-        total_buyback_usd = buyback_price_usd * shares_to_buyback
-        buyback_cost_pln = total_buyback_usd * fx_close
-        
-        # Proporcjonalne premium (ile % pozycji odkupujemy)
-        buyback_ratio = contracts_to_buyback / total_contracts
-        premium_for_buyback_pln = premium_sell_pln * buyback_ratio
-        
-        # P/L PLN
-        pl_pln = premium_for_buyback_pln - buyback_cost_pln
-        pl_usd = (premium_sell_usd * shares_to_buyback) - total_buyback_usd
-        
-        # 5. KONWERSJE DAT
+        # 3. POBIERZ KURS NBP NA BUYBACK_DATE
         if hasattr(buyback_date, 'strftime'):
             buyback_date_str = buyback_date.strftime('%Y-%m-%d')
         else:
             buyback_date_str = str(buyback_date)
         
-        if hasattr(open_date, 'strftime'):
-            open_date_str = open_date.strftime('%Y-%m-%d')
-        else:
-            open_date_str = str(open_date)
+        from nbp_api_client import get_usd_rate_for_date
         
-        if hasattr(expiry_date, 'strftime'):
-            expiry_date_str = expiry_date.strftime('%Y-%m-%d')
-        else:
-            expiry_date_str = str(expiry_date)
+        try:
+            nbp_result = get_usd_rate_for_date(buyback_date_str)
+            if isinstance(nbp_result, dict):
+                fx_close = nbp_result['rate']
+                fx_close_date = nbp_result.get('date', buyback_date_str)
+            else:
+                fx_close = float(nbp_result)
+                fx_close_date = buyback_date_str
+        except:
+            fx_close = 4.0  # Fallback
+            fx_close_date = buyback_date_str
         
-        # 6. SCENARIUSZ A: CAŁKOWITY BUYBACK (stara logika)
-        if contracts_to_buyback == total_contracts:
-            print(f"🎯 CAŁKOWITY BUYBACK CC #{cc_id}: {total_contracts} kontraktów")
-            
-            # Aktualizuj oryginalną pozycję jako bought_back
-            cursor.execute("""
-                UPDATE options_cc 
-                SET status = 'bought_back',
-                    close_date = ?,
-                    premium_buyback_usd = ?,
-                    premium_buyback_pln = ?,
-                    fx_close = ?,
-                    pl_pln = ?
-                WHERE id = ?
-            """, (buyback_date_str, buyback_price_usd, buyback_cost_pln, 
-                  fx_close, pl_pln, cc_id))
-            
-            message = f'CC #{cc_id} w pełni odkupione ({total_contracts} kontraktów)'
-            remaining_contracts = 0
-            new_cc_id = None
+        # 4. KALKULACJE FINANSOWE
+        shares_to_buyback = contracts_to_buyback * 100
         
-        # 7. SCENARIUSZ B: CZĘŚCIOWY BUYBACK (nowa logika!)
-        else:
-            print(f"✂️ CZĘŚCIOWY BUYBACK CC #{cc_id}: {contracts_to_buyback}/{total_contracts} kontraktów")
+        # Koszt odkupu (z prowizjami)
+        buyback_cost_usd = shares_to_buyback * buyback_price_usd
+        total_fees_usd = broker_fee_usd + reg_fee_usd
+        total_buyback_cost_usd = buyback_cost_usd + total_fees_usd
+        buyback_cost_pln = total_buyback_cost_usd * fx_close
+        
+        # Premium otrzymana za odkupywaną część (proporcjonalnie)
+        premium_proportion = contracts_to_buyback / total_contracts
+        premium_for_buyback_usd = premium_sell_usd * shares_to_buyback
+        premium_for_buyback_pln = premium_for_buyback_usd * fx_open
+        
+        # P/L tylko w PLN
+        pl_pln = premium_for_buyback_pln - buyback_cost_pln
+        
+        # 5. JEŚLI CZĘŚCIOWY BUYBACK - PODZIEL POZYCJĘ
+        if contracts_to_buyback < total_contracts:
             
-            # A) Zmniejsz oryginalną pozycję
-            remaining_contracts = total_contracts - contracts_to_buyback
-            remaining_premium_pln = premium_sell_pln * (remaining_contracts / total_contracts)
-            
-            cursor.execute("""
-                UPDATE options_cc 
-                SET contracts = ?,
-                    premium_sell_pln = ?
-                WHERE id = ?
-            """, (remaining_contracts, remaining_premium_pln, cc_id))
-            
-            print(f"   📝 Zmniejszono CC #{cc_id}: {total_contracts} → {remaining_contracts} kontraktów")
-            
-            # B) Stwórz nową pozycję dla odkupionej części
+            # A) STWÓRZ NOWY REKORD DLA ODKUPIONEJ CZĘŚCI
             cursor.execute("""
                 INSERT INTO options_cc (
-                    ticker, contracts, strike_usd, premium_sell_usd,
+                    ticker, contracts, strike_usd, premium_sell_usd, 
                     open_date, expiry_date, status, fx_open, premium_sell_pln,
-                    close_date, premium_buyback_usd, premium_buyback_pln,
-                    fx_close, pl_pln
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    close_date, premium_buyback_usd, fx_close, premium_buyback_pln,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             """, (
                 ticker, contracts_to_buyback, strike_usd, premium_sell_usd,
-                open_date_str, expiry_date_str, 'bought_back', fx_open, premium_for_buyback_pln,
-                buyback_date_str, buyback_price_usd, buyback_cost_pln,
-                fx_close, pl_pln
+                open_date, expiry_date, 'bought_back', fx_open, premium_for_buyback_pln,
+                buyback_date_str, buyback_price_usd, fx_close, buyback_cost_pln
             ))
             
             new_cc_id = cursor.lastrowid
-            print(f"   ✅ Utworzono nowe CC #{new_cc_id} dla odkupionej części ({contracts_to_buyback} kontraktów)")
             
-            message = f'Częściowy buyback: {contracts_to_buyback}/{total_contracts} kontraktów. Nowe CC #{new_cc_id}'
-            remaining_contracts = total_contracts - contracts_to_buyback
-        
-        # 8. ZWOLNIJ AKCJE (proporcjonalnie do ilości odkupionych kontraktów)
-        print(f"🔓 Zwalnianie {shares_to_buyback} akcji...")
-        
-        # Pobierz rezerwacje dla oryginalnej CC
-        cursor.execute("""
-            SELECT lot_id, qty_reserved
-            FROM options_cc_reservations
-            WHERE cc_id = ?
-            ORDER BY id
-        """, (cc_id,))
-        reservations = cursor.fetchall()
-        
-        shares_released = 0
-        shares_still_to_release = shares_to_buyback
-        
-        if not reservations:
-            print(f"⚠️ Brak rezerwacji dla CC #{cc_id} - używam alternatywnej metody zwolnienia")
-            # Fallback: znajdź LOT-y tickera i zwolnij proporcjonalnie
+            # B) ZAKTUALIZUJ ORYGINALNĄ CC (ZMNIEJSZ KONTRAKTY)
+            remaining_premium_pln = premium_sell_pln - premium_for_buyback_pln
+            
             cursor.execute("""
-                SELECT id FROM lots 
-                WHERE ticker = ? 
-                ORDER BY buy_date, id 
-                LIMIT 1
-            """, (ticker.upper(),))
+                UPDATE options_cc 
+                SET contracts = ?, premium_sell_pln = ?
+                WHERE id = ?
+            """, (total_contracts - contracts_to_buyback, remaining_premium_pln, cc_id))
             
-            lot_result = cursor.fetchone()
-            if lot_result:
+        else:
+            # CAŁKOWITY BUYBACK - ZMIEŃ STATUS ORYGINALNEJ CC
+            cursor.execute("""
+                UPDATE options_cc 
+                SET status = 'bought_back', close_date = ?, 
+                    premium_buyback_usd = ?, fx_close = ?, premium_buyback_pln = ?
+                WHERE id = ?
+            """, (
+                buyback_date_str, buyback_price_usd, fx_close, buyback_cost_pln, cc_id
+            ))
+            
+            new_cc_id = cc_id
+        
+        # 6. ZWOLNIJ AKCJE - KLUCZOWA NAPRAWKA: BEZ lot_reservations!
+        shares_to_release = shares_to_buyback
+        
+        # NOWA LOGIKA: Zwiększ quantity_open w lots FIFO
+        # Znajdź LOT-y tego tickera, które były zarezerwowane (quantity_open = 0)
+        cursor.execute("""
+            SELECT id, quantity_total, quantity_open, buy_date
+            FROM lots 
+            WHERE ticker = ? AND quantity_total > 0
+            ORDER BY buy_date ASC, id ASC
+        """, (ticker.upper(),))
+        
+        lots_for_ticker = cursor.fetchall()
+        remaining_to_release = shares_to_release
+        lots_updated = 0
+        
+        for lot_id, qty_total, qty_open, buy_date in lots_for_ticker:
+            if remaining_to_release <= 0:
+                break
+            
+            # Ile akcji z tego LOT-a może być zarezerwowanych pod CC
+            potentially_reserved = qty_total - qty_open
+            
+            if potentially_reserved > 0:
+                # Zwolnij część lub całość z tego LOT-a
+                qty_to_release = min(potentially_reserved, remaining_to_release)
+                
+                # Zwiększ quantity_open (zwolnienie rezerwacji)
                 cursor.execute("""
                     UPDATE lots 
                     SET quantity_open = quantity_open + ?
                     WHERE id = ?
-                """, (shares_to_buyback, lot_result[0]))
-                shares_released = shares_to_buyback
-        else:
-            # Standardowe zwolnienie z rezerwacji FIFO
-            for lot_id, qty_reserved in reservations:
-                if shares_still_to_release <= 0:
-                    break
-                
-                # Ile z tego LOT-a zwolnić (proporcjonalnie)
-                qty_to_release = min(shares_still_to_release, qty_reserved)
-                
-                # Zwolnij akcje w lots
-                cursor.execute("""
-                    UPDATE lots 
-                    SET quantity_open = quantity_open + ? 
-                    WHERE id = ?
                 """, (qty_to_release, lot_id))
                 
-                # Aktualizuj lub usuń rezerwację
-                new_reservation = qty_reserved - qty_to_release
+                remaining_to_release -= qty_to_release
+                lots_updated += 1
                 
-                if new_reservation <= 0:
-                    # Usuń całą rezerwację dla tego LOT-a
-                    cursor.execute("""
-                        DELETE FROM options_cc_reservations 
-                        WHERE cc_id = ? AND lot_id = ?
-                    """, (cc_id, lot_id))
-                    print(f"   🗑️ Usunięto rezerwację LOT #{lot_id}")
-                else:
-                    # Zmniejsz rezerwację
-                    cursor.execute("""
-                        UPDATE options_cc_reservations 
-                        SET qty_reserved = ? 
-                        WHERE cc_id = ? AND lot_id = ?
-                    """, (new_reservation, cc_id, lot_id))
-                    print(f"   📝 Zmniejszono rezerwację LOT #{lot_id}: {qty_reserved} → {new_reservation}")
-                
-                shares_released += qty_to_release
-                shares_still_to_release -= qty_to_release
+                print(f"   🔓 LOT #{lot_id}: zwolniono {qty_to_release} akcji (nowe qty_open: {qty_open + qty_to_release})")
         
-        # 9. UTWÓRZ CASHFLOW BUYBACK (ujemny)
-        cashflow_description = f"Buyback CC {ticker} {contracts_to_buyback}x${strike_usd:.2f} exp {expiry_date_str}"
+        if remaining_to_release > 0:
+            print(f"⚠️ Nie udało się zwolnić wszystkich akcji - pozostało {remaining_to_release}")
+        
+        # 7. UTWÓRZ CASHFLOW (wydatek)
+        if contracts_to_buyback < total_contracts:
+            cashflow_description = f"Częściowy buyback CC #{cc_id} ({contracts_to_buyback}/{total_contracts} kontraktów)"
+        else:
+            cashflow_description = f"Buyback CC #{cc_id} ({total_contracts} kontraktów)"
+        
+        if total_fees_usd > 0:
+            cashflow_description += f" + prowizje ${total_fees_usd:.2f}"
         
         cursor.execute("""
             INSERT INTO cashflows (
@@ -3772,33 +3717,32 @@ def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd,
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             'option_buyback',
-            -total_buyback_usd,  # Ujemna kwota (wydatek)
+            -total_buyback_cost_usd,  # Ujemna kwota (wydatek)
             buyback_date_str,
             fx_close,
             -buyback_cost_pln,
             cashflow_description,
             'options_cc',
-            new_cc_id if new_cc_id else cc_id  # Link do nowego CC jeśli częściowy
+            new_cc_id
         ))
-        
-        print(f"💸 Utworzono cashflow buyback: -${total_buyback_usd:.2f}")
         
         conn.commit()
         conn.close()
         
         return {
             'success': True,
-            'message': message,
-            'pl_pln': pl_pln,
-            'pl_usd': pl_usd,
-            'shares_released': shares_released,
+            'message': f'Odkupiono {contracts_to_buyback} kontraktów CC #{cc_id}!',
             'contracts_bought_back': contracts_to_buyback,
-            'contracts_remaining': remaining_contracts,
-            'is_partial': contracts_to_buyback < total_contracts,
-            'new_cc_id': new_cc_id,
-            'original_cc_id': cc_id,
+            'contracts_remaining': total_contracts - contracts_to_buyback if contracts_to_buyback < total_contracts else 0,
+            'pl_pln': pl_pln,
+            'premium_received_pln': premium_for_buyback_pln,
+            'buyback_cost_pln': buyback_cost_pln,
+            'total_fees_usd': total_fees_usd,
             'fx_close': fx_close,
-            'buyback_cost_pln': buyback_cost_pln
+            'fx_close_date': fx_close_date,
+            'shares_released': shares_to_release,
+            'lots_updated': lots_updated,
+            'new_cc_id': new_cc_id if contracts_to_buyback < total_contracts else None
         }
         
     except Exception as e:
@@ -3806,12 +3750,707 @@ def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd,
             conn.rollback()
             conn.close()
         
-        print(f"❌ Błąd częściowego buyback: {e}")
         return {
             'success': False,
             'message': f'Błąd częściowego buyback: {str(e)}'
         }
 
+def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_fee_usd=0.0, reg_fee_usd=0.0):
+    """
+    🚀 UPROSZCZONA: Buyback CC - działa z istniejącą strukturą bazy
+    
+    NAPRAWKA: Używa tylko quantity_open w lots, bez lot_reservations
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # 1. POBIERZ DANE CC
+        cursor.execute("""
+            SELECT id, ticker, contracts, premium_sell_usd, open_date, expiry_date,
+                   status, fx_open, premium_sell_pln
+            FROM options_cc 
+            WHERE id = ? AND status = 'open'
+        """, (cc_id,))
+        
+        cc_record = cursor.fetchone()
+        if not cc_record:
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} nie znalezione lub już zamknięte'}
+        
+        cc_id, ticker, contracts, premium_sell_usd, open_date, expiry_date, status, fx_open, premium_sell_pln = cc_record
+        
+        # 2. POBIERZ KURS NBP
+        if hasattr(buyback_date, 'strftime'):
+            buyback_date_str = buyback_date.strftime('%Y-%m-%d')
+        else:
+            buyback_date_str = str(buyback_date)
+        
+        from nbp_api_client import get_usd_rate_for_date
+        
+        try:
+            nbp_result = get_usd_rate_for_date(buyback_date_str)
+            if isinstance(nbp_result, dict):
+                fx_close = nbp_result['rate']
+                fx_close_date = nbp_result.get('date', buyback_date_str)
+            else:
+                fx_close = float(nbp_result)
+                fx_close_date = buyback_date_str
+        except:
+            fx_close = 4.0
+            fx_close_date = buyback_date_str
+        
+        # 3. KALKULACJE
+        shares_to_release = contracts * 100
+        buyback_cost_usd = shares_to_release * buyback_price_usd
+        total_fees_usd = broker_fee_usd + reg_fee_usd
+        total_buyback_cost_usd = buyback_cost_usd + total_fees_usd
+        buyback_cost_pln = total_buyback_cost_usd * fx_close
+        
+        pl_pln = premium_sell_pln - buyback_cost_pln
+        
+        # 4. ZAKTUALIZUJ CC NA BOUGHT_BACK
+        cursor.execute("""
+            UPDATE options_cc 
+            SET status = 'bought_back', 
+                close_date = ?, 
+                premium_buyback_usd = ?, 
+                fx_close = ?, 
+                premium_buyback_pln = ?
+            WHERE id = ?
+        """, (buyback_date_str, buyback_price_usd, fx_close, buyback_cost_pln, cc_id))
+        
+        # 5. ZWOLNIJ AKCJE - ZWIĘKSZ quantity_open FIFO
+        cursor.execute("""
+            SELECT id, quantity_total, quantity_open, buy_date
+            FROM lots 
+            WHERE ticker = ? AND quantity_total > 0
+            ORDER BY buy_date ASC, id ASC
+        """, (ticker.upper(),))
+        
+        lots_for_ticker = cursor.fetchall()
+        remaining_to_release = shares_to_release
+        lots_updated = 0
+        
+        for lot_id, qty_total, qty_open, buy_date in lots_for_ticker:
+            if remaining_to_release <= 0:
+                break
+            
+            # Ile z tego LOT-a może być zarezerwowane pod CC
+            potentially_reserved = qty_total - qty_open
+            
+            if potentially_reserved > 0:
+                # Zwolnij część lub całość
+                qty_to_release = min(potentially_reserved, remaining_to_release)
+                
+                cursor.execute("""
+                    UPDATE lots 
+                    SET quantity_open = quantity_open + ?
+                    WHERE id = ?
+                """, (qty_to_release, lot_id))
+                
+                remaining_to_release -= qty_to_release
+                lots_updated += 1
+        
+        # 6. UTWÓRZ CASHFLOW
+        cashflow_description = f"Buyback CC #{cc_id} ({contracts} kontraktów)"
+        if total_fees_usd > 0:
+            cashflow_description += f" + prowizje ${total_fees_usd:.2f}"
+        
+        cursor.execute("""
+            INSERT INTO cashflows (
+                type, amount_usd, date, fx_rate, amount_pln, 
+                description, ref_table, ref_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            'option_buyback',
+            -total_buyback_cost_usd,
+            buyback_date_str,
+            fx_close,
+            -buyback_cost_pln,
+            cashflow_description,
+            'options_cc',
+            cc_id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'CC #{cc_id} odkupione pomyślnie!',
+            'contracts_bought_back': contracts,
+            'contracts_remaining': 0,  # Zawsze pełny buyback w tej wersji
+            'pl_pln': pl_pln,
+            'premium_received_pln': premium_sell_pln,
+            'buyback_cost_pln': buyback_cost_pln,
+            'total_fees_usd': total_fees_usd,
+            'fx_close': fx_close,
+            'fx_close_date': fx_close_date,
+            'shares_released': shares_to_release,
+            'lots_updated': lots_updated
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        return {
+            'success': False,
+            'message': f'Błąd buyback: {str(e)}'
+        }
+
+# ============================================================================
+# ROZWIĄZANIE 1: Dodaj tabelę mapowania rezerwacji do db.py
+# ============================================================================
+
+def create_cc_reservations_mapping_table():
+    """
+    Tworzy tabelę mapowania CC → LOT-y (potrzebne do częściowego buyback)
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return False
+        
+        cursor = conn.cursor()
+        
+        # Sprawdź czy tabela już istnieje
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='cc_lot_mappings'
+        """)
+        
+        if cursor.fetchone():
+            conn.close()
+            return True  # Tabela już istnieje
+        
+        # Utwórz tabelę mapowania
+        cursor.execute("""
+            CREATE TABLE cc_lot_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cc_id INTEGER NOT NULL,
+                lot_id INTEGER NOT NULL,
+                shares_reserved INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cc_id) REFERENCES options_cc (id) ON DELETE CASCADE,
+                FOREIGN KEY (lot_id) REFERENCES lots (id) ON DELETE CASCADE,
+                UNIQUE(cc_id, lot_id)
+            )
+        """)
+        
+        conn.commit()
+        conn.close()
+        
+        print("✅ Utworzono tabelę cc_lot_mappings")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Błąd tworzenia tabeli mapowania: {e}")
+        return False
+
+def rebuild_cc_mappings_from_existing_data():
+    """
+    Odbudowuje mapowania CC → LOT-y na podstawie istniejących danych
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # 1. Wyczyść istniejące mapowania
+        cursor.execute("DELETE FROM cc_lot_mappings")
+        
+        # 2. Pobierz wszystkie otwarte CC
+        cursor.execute("""
+            SELECT id, ticker, contracts
+            FROM options_cc 
+            WHERE status = 'open'
+            ORDER BY open_date ASC, id ASC
+        """)
+        
+        open_cc_list = cursor.fetchall()
+        
+        if not open_cc_list:
+            conn.close()
+            return {'success': True, 'message': 'Brak otwartych CC do mapowania'}
+        
+        mappings_created = 0
+        
+        for cc_id, ticker, contracts in open_cc_list:
+            shares_needed = contracts * 100
+            
+            # 3. Znajdź LOT-y FIFO dla tego tickera
+            cursor.execute("""
+                SELECT id, quantity_total, buy_date
+                FROM lots 
+                WHERE ticker = ?
+                ORDER BY buy_date ASC, id ASC
+            """, (ticker.upper(),))
+            
+            lots_for_ticker = cursor.fetchall()
+            remaining_to_map = shares_needed
+            
+            for lot_id, qty_total, buy_date in lots_for_ticker:
+                if remaining_to_map <= 0:
+                    break
+                
+                # Ile akcji z tego LOT-a przypisać do tej CC
+                shares_to_map = min(qty_total, remaining_to_map)
+                
+                # Stwórz mapowanie
+                cursor.execute("""
+                    INSERT INTO cc_lot_mappings (cc_id, lot_id, shares_reserved)
+                    VALUES (?, ?, ?)
+                """, (cc_id, lot_id, shares_to_map))
+                
+                remaining_to_map -= shares_to_map
+                mappings_created += 1
+                
+                print(f"   📊 CC #{cc_id}: LOT #{lot_id} → {shares_to_map} akcji")
+            
+            if remaining_to_map > 0:
+                print(f"⚠️ CC #{cc_id}: brakuje {remaining_to_map} akcji do pełnego pokrycia")
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True, 
+            'message': f'Odbudowano {mappings_created} mapowań dla {len(open_cc_list)} CC'
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        return {'success': False, 'message': f'Błąd odbudowy mapowań: {e}'}
+
+# ============================================================================
+# ROZWIĄZANIE 2: Prawdziwy częściowy buyback z mapowaniami
+# ============================================================================
+
+def partial_buyback_covered_call_with_mappings(cc_id, contracts_to_buyback, buyback_price_usd, buyback_date, broker_fee_usd=0.0, reg_fee_usd=0.0):
+    """
+    🔧 NAPRAWIONA: Częściowy buyback CC - POPRAWNY KURS NBP (identyczny jak w pełnym buyback)
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # 0. SPRAWDŹ TABELĘ MAPOWAŃ
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cc_lot_mappings'")
+        if not cursor.fetchone():
+            conn.close()
+            return {'success': False, 'message': 'Brak tabeli mapowań! Włącz częściowy buyback w Dev Tools'}
+        
+        # 1. POBIERZ DANE CC
+        cursor.execute("""
+            SELECT id, ticker, contracts, strike_usd, premium_sell_usd, 
+                   open_date, expiry_date, status, fx_open, premium_sell_pln
+            FROM options_cc 
+            WHERE id = ? AND status = 'open'
+        """, (cc_id,))
+        
+        cc_record = cursor.fetchone()
+        if not cc_record:
+            conn.close()
+            return {'success': False, 'message': f'CC #{cc_id} nie znalezione lub już zamknięte'}
+        
+        cc_id, ticker, total_contracts, strike_usd, premium_sell_usd, open_date, expiry_date, status, fx_open, premium_sell_pln = cc_record
+        
+        # 2. WALIDACJA
+        if contracts_to_buyback <= 0 or contracts_to_buyback > total_contracts:
+            conn.close()
+            return {'success': False, 'message': f'Nieprawidłowa liczba kontraktów: {contracts_to_buyback} (dostępne: {total_contracts})'}
+        
+        # 3. 🎯 NAPRAWKA: IDENTYCZNE POBIERANIE NBP JAK W PEŁNYM BUYBACK
+        try:
+            import nbp_api_client
+            
+            # Konwertuj datę jeśli trzeba (identycznie jak w buyback_covered_call_with_fees)
+            if hasattr(buyback_date, 'strftime'):
+                buyback_date_for_nbp = buyback_date
+            elif isinstance(buyback_date, str):
+                from datetime import datetime
+                buyback_date_for_nbp = datetime.strptime(buyback_date, '%Y-%m-%d').date()
+            else:
+                buyback_date_for_nbp = buyback_date
+            
+            print(f"🔍 PARTIAL BUYBACK NBP: Pobieranie kursu dla {buyback_date_for_nbp}")
+            
+            nbp_result = nbp_api_client.get_usd_rate_for_date(buyback_date_for_nbp)
+            
+            if isinstance(nbp_result, dict) and 'rate' in nbp_result:
+                fx_close = nbp_result['rate']
+                fx_close_date = nbp_result.get('date', buyback_date_for_nbp)
+                print(f"💱 PARTIAL BUYBACK NBP: Otrzymano kurs {fx_close:.4f} na {fx_close_date}")
+            else:
+                fx_close = float(nbp_result) if nbp_result else None
+                fx_close_date = buyback_date_for_nbp
+                
+                if fx_close is None:
+                    raise Exception("NBP zwrócił None")
+                
+                print(f"💱 PARTIAL BUYBACK NBP: Kurs jako float: {fx_close:.4f}")
+                
+        except Exception as e:
+            print(f"❌ PARTIAL BUYBACK NBP: Błąd {e}")
+            conn.close()
+            return {'success': False, 'message': f'Błąd kursu NBP: {str(e)}'}
+        
+        print(f"✅ PARTIAL BUYBACK NBP: Finalny kurs = {fx_close:.4f}")
+        
+        # 4. KALKULACJE FINANSOWE (dla wybranej liczby kontraktów)
+        shares_to_buyback = contracts_to_buyback * 100
+        
+        # Proporcjonalne rozłożenie premium
+        premium_proportion = contracts_to_buyback / total_contracts
+        premium_for_buyback_usd = premium_sell_usd * shares_to_buyback
+        premium_for_buyback_pln = premium_for_buyback_usd * fx_open
+        
+        # Koszt buyback z prowizjami
+        buyback_cost_usd = shares_to_buyback * buyback_price_usd
+        total_fees_usd = broker_fee_usd + reg_fee_usd
+        total_buyback_cost_usd = buyback_cost_usd + total_fees_usd
+        buyback_cost_pln = total_buyback_cost_usd * fx_close
+        
+        # P/L
+        pl_pln = premium_for_buyback_pln - buyback_cost_pln
+        pl_usd = premium_for_buyback_usd - total_buyback_cost_usd
+        
+        # 5. KONWERSJE DAT
+        if hasattr(buyback_date, 'strftime'):
+            buyback_date_str = buyback_date.strftime('%Y-%m-%d')
+        else:
+            buyback_date_str = str(buyback_date)
+        
+        # 6. OBSŁUGA CZĘŚCIOWEGO VS PEŁNEGO BUYBACK
+        if contracts_to_buyback < total_contracts:
+            # A) CZĘŚCIOWY - zostaw oryginalną CC z mniejszą liczbą kontraktów
+            remaining_contracts = total_contracts - contracts_to_buyback
+            remaining_premium_pln = premium_sell_pln - premium_for_buyback_pln
+            
+            cursor.execute("""
+                UPDATE options_cc 
+                SET contracts = ?, premium_sell_pln = ?
+                WHERE id = ?
+            """, (remaining_contracts, remaining_premium_pln, cc_id))
+            
+            # B) STWÓRZ NOWY REKORD dla odkupionej części
+            cursor.execute("""
+                INSERT INTO options_cc (
+                    ticker, contracts, strike_usd, premium_sell_usd, 
+                    open_date, expiry_date, status, fx_open, premium_sell_pln,
+                    close_date, premium_buyback_usd, fx_close, premium_buyback_pln,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (
+                ticker, contracts_to_buyback, strike_usd, premium_sell_usd,
+                open_date, expiry_date, 'bought_back', fx_open, premium_for_buyback_pln,
+                buyback_date_str, buyback_price_usd, fx_close, buyback_cost_pln
+            ))
+            
+            new_cc_id = cursor.lastrowid
+            
+        else:
+            # PEŁNY BUYBACK - zmień status oryginalnej CC
+            cursor.execute("""
+                UPDATE options_cc 
+                SET status = 'bought_back', close_date = ?, 
+                    premium_buyback_usd = ?, fx_close = ?, premium_buyback_pln = ?
+                WHERE id = ?
+            """, (buyback_date_str, buyback_price_usd, fx_close, buyback_cost_pln, cc_id))
+            
+            new_cc_id = cc_id
+        
+        # 7. ZWOLNIJ AKCJE Z MAPOWAŃ
+        cursor.execute("""
+            SELECT lot_id, shares_reserved
+            FROM cc_lot_mappings 
+            WHERE cc_id = ?
+            ORDER BY lot_id ASC
+        """, (cc_id,))
+        
+        mappings = cursor.fetchall()
+        shares_to_release = shares_to_buyback
+        remaining_to_release = shares_to_release
+        lots_updated = 0
+        
+        for lot_id, shares_mapped in mappings:
+            if remaining_to_release <= 0:
+                break
+            
+            # Ile zwolnić z tego LOT-a
+            shares_to_release_from_lot = min(shares_mapped, remaining_to_release)
+            
+            # Zwiększ quantity_open w LOT-ie
+            cursor.execute("""
+                UPDATE lots 
+                SET quantity_open = quantity_open + ?
+                WHERE id = ?
+            """, (shares_to_release_from_lot, lot_id))
+            
+            if contracts_to_buyback < total_contracts:
+                # CZĘŚCIOWY: zaktualizuj mapowanie
+                new_shares_mapped = shares_mapped - shares_to_release_from_lot
+                
+                if new_shares_mapped > 0:
+                    cursor.execute("""
+                        UPDATE cc_lot_mappings 
+                        SET shares_reserved = ?
+                        WHERE cc_id = ? AND lot_id = ?
+                    """, (new_shares_mapped, cc_id, lot_id))
+                else:
+                    cursor.execute("""
+                        DELETE FROM cc_lot_mappings 
+                        WHERE cc_id = ? AND lot_id = ?
+                    """, (cc_id, lot_id))
+                    
+            else:
+                # PEŁNY: usuń całe mapowanie
+                cursor.execute("""
+                    DELETE FROM cc_lot_mappings 
+                    WHERE cc_id = ? AND lot_id = ?
+                """, (cc_id, lot_id))
+            
+            remaining_to_release -= shares_to_release_from_lot
+            lots_updated += 1
+        
+        # 8. UTWÓRZ CASHFLOW
+        if contracts_to_buyback < total_contracts:
+            description = f"Częściowy buyback CC #{cc_id} ({contracts_to_buyback}/{total_contracts} kontraktów)"
+        else:
+            description = f"Buyback CC #{cc_id} ({total_contracts} kontraktów)"
+        
+        if total_fees_usd > 0:
+            description += f" + prowizje ${total_fees_usd:.2f}"
+        
+        cursor.execute("""
+            INSERT INTO cashflows (
+                type, amount_usd, date, fx_rate, amount_pln, 
+                description, ref_table, ref_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            'option_buyback',
+            -total_buyback_cost_usd,
+            buyback_date_str,
+            fx_close,  # ← NAPRAWIONY KURS NBP!
+            -buyback_cost_pln,
+            description,
+            'options_cc',
+            new_cc_id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'Odkupiono {contracts_to_buyback} z {total_contracts} kontraktów CC #{cc_id}!',
+            'contracts_bought_back': contracts_to_buyback,
+            'contracts_remaining': total_contracts - contracts_to_buyback,
+            'pl_pln': pl_pln,
+            'pl_usd': pl_usd,  # Dodane dla kompletności
+            'premium_received_pln': premium_for_buyback_pln,
+            'buyback_cost_pln': buyback_cost_pln,
+            'total_fees_usd': total_fees_usd,
+            'fx_close': fx_close,  # ← PRAWIDŁOWY KURS!
+            'fx_close_date': fx_close_date,
+            'shares_released': shares_to_release,
+            'lots_updated': lots_updated,
+            'new_cc_id': new_cc_id if contracts_to_buyback < total_contracts else None,
+            'is_partial': contracts_to_buyback < total_contracts
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        return {
+            'success': False,
+            'message': f'Błąd częściowego buyback: {str(e)}'
+        }
+
+# DODAJ TAKŻE FUNKCJĘ POMOCNICZĄ DO POBIERANIA KURSU NBP:
+def get_fx_rate_for_date(target_date):
+    """
+    🎯 WSPÓLNA FUNKCJA pobierania kursu NBP - używana w obu buyback
+    
+    IDENTYCZNA LOGIKA jak w buyback_covered_call_with_fees
+    """
+    try:
+        import nbp_api_client
+        
+        # Konwertuj datę jeśli trzeba
+        if hasattr(target_date, 'strftime'):
+            date_for_nbp = target_date
+        elif isinstance(target_date, str):
+            from datetime import datetime
+            date_for_nbp = datetime.strptime(target_date, '%Y-%m-%d').date()
+        else:
+            date_for_nbp = target_date
+        
+        print(f"🔍 FX_RATE: Pobieranie kursu NBP dla {date_for_nbp}")
+        
+        nbp_result = nbp_api_client.get_usd_rate_for_date(date_for_nbp)
+        
+        if isinstance(nbp_result, dict) and 'rate' in nbp_result:
+            fx_rate = nbp_result['rate']
+            fx_date = nbp_result.get('date', date_for_nbp)
+            print(f"💱 FX_RATE: Otrzymano kurs {fx_rate:.4f} na {fx_date}")
+        else:
+            fx_rate = float(nbp_result) if nbp_result else None
+            fx_date = date_for_nbp
+            
+            if fx_rate is None:
+                raise Exception("NBP zwrócił None")
+            
+            print(f"💱 FX_RATE: Kurs jako float: {fx_rate:.4f}")
+        
+        return {'rate': fx_rate, 'date': fx_date}
+        
+    except Exception as e:
+        print(f"❌ FX_RATE: Błąd {e}")
+        raise Exception(f'Błąd kursu NBP: {str(e)}')  # Rzuć błąd zamiast fallback
+
+# ============================================================================
+# ROZWIĄZANIE 3: Zaktualizowana sprzedaż CC z mapowaniami
+# ============================================================================
+
+def save_covered_call_with_mappings(cc_data):
+    """
+    Zapisuje CC z tworzeniem mapowań LOT-ów (potrzebne do częściowego buyback)
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # 1. SPRAWDŹ CZY TABELA MAPOWAŃ ISTNIEJE
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='cc_lot_mappings'
+        """)
+        
+        if not cursor.fetchone():
+            # Stwórz tabelę mapowań
+            cursor.execute("""
+                CREATE TABLE cc_lot_mappings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cc_id INTEGER NOT NULL,
+                    lot_id INTEGER NOT NULL,
+                    shares_reserved INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cc_id) REFERENCES options_cc (id) ON DELETE CASCADE,
+                    FOREIGN KEY (lot_id) REFERENCES lots (id) ON DELETE CASCADE,
+                    UNIQUE(cc_id, lot_id)
+                )
+            """)
+        
+        # 2. ZAPISZ CC (jak zwykle)
+        cursor.execute("""
+            INSERT INTO options_cc (
+                ticker, contracts, strike_usd, premium_sell_usd, open_date, expiry_date,
+                status, fx_open, premium_sell_pln, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """, (
+            cc_data['ticker'], cc_data['contracts'], cc_data['strike_usd'],
+            cc_data['premium_sell_usd'], cc_data['open_date'], cc_data['expiry_date'],
+            'open', cc_data['fx_open'], cc_data['premium_sell_pln']
+        ))
+        
+        cc_id = cursor.lastrowid
+        shares_needed = cc_data['contracts'] * 100
+        
+        # 3. STWÓRZ MAPOWANIA I ZAREZERWUJ AKCJE FIFO
+        cursor.execute("""
+            SELECT id, quantity_open, buy_date
+            FROM lots 
+            WHERE ticker = ? AND quantity_open > 0
+            ORDER BY buy_date ASC, id ASC
+        """, (cc_data['ticker'].upper(),))
+        
+        available_lots = cursor.fetchall()
+        remaining_to_reserve = shares_needed
+        mappings_created = 0
+        
+        for lot_id, qty_open, buy_date in available_lots:
+            if remaining_to_reserve <= 0:
+                break
+            
+            # Ile zarezerwować z tego LOT-a
+            shares_to_reserve = min(qty_open, remaining_to_reserve)
+            
+            # Stwórz mapowanie
+            cursor.execute("""
+                INSERT INTO cc_lot_mappings (cc_id, lot_id, shares_reserved)
+                VALUES (?, ?, ?)
+            """, (cc_id, lot_id, shares_to_reserve))
+            
+            # Zmniejsz quantity_open w LOT-ie
+            cursor.execute("""
+                UPDATE lots 
+                SET quantity_open = quantity_open - ?
+                WHERE id = ?
+            """, (shares_to_reserve, lot_id))
+            
+            remaining_to_reserve -= shares_to_reserve
+            mappings_created += 1
+            
+            print(f"   📊 CC #{cc_id}: zarezerwowano {shares_to_reserve} akcji z LOT #{lot_id}")
+        
+        if remaining_to_reserve > 0:
+            # Rollback - brakuje akcji
+            conn.rollback()
+            conn.close()
+            return {
+                'success': False,
+                'message': f'Brakuje {remaining_to_reserve} akcji do pokrycia CC!'
+            }
+        
+        # 4. UTWÓRZ CASHFLOW
+        cursor.execute("""
+            INSERT INTO cashflows (
+                type, amount_usd, date, fx_rate, amount_pln, 
+                description, ref_table, ref_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            'option_sell',
+            cc_data['net_premium_usd'],
+            cc_data['open_date'],
+            cc_data['fx_open'],
+            cc_data['net_premium_pln'],
+            f"Sprzedaż CC {cc_data['ticker']} {cc_data['contracts']} kontr.",
+            'options_cc',
+            cc_id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'CC #{cc_id} zapisane z {mappings_created} mapowaniami LOT-ów!',
+            'cc_id': cc_id,
+            'mappings_created': mappings_created
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        return {
+            'success': False,
+            'message': f'Błąd zapisu CC z mapowaniami: {str(e)}'
+        }
 
 # Test na końcu pliku (opcjonalny)
 if __name__ == "__main__":
