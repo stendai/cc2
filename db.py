@@ -1221,120 +1221,113 @@ def test_cc_reservations():
 
 def save_covered_call_to_database(cc_data):
     """
-    Zapisuje covered call do bazy z rezerwacją akcji FIFO
+    Zapisuje covered call do bazy z rezerwacją akcji FIFO.
+    Tworzy NETTO cashflow (po prowizjach) i utrwala rezerwacje w tabeli options_cc_reservations.
     """
+    conn = None
     try:
         conn = get_connection()
         if not conn:
             return {'success': False, 'message': 'Brak połączenia z bazą'}
-        
+
         cursor = conn.cursor()
-        
-        # 1. SPRAWDŹ POKRYCIE (double-check)
+
+        # Tabela rezerwacji (idempotentnie)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS options_cc_reservations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cc_id INTEGER NOT NULL,
+                lot_id INTEGER NOT NULL,
+                qty_reserved INTEGER NOT NULL,
+                FOREIGN KEY(cc_id) REFERENCES options_cc(id) ON DELETE CASCADE,
+                FOREIGN KEY(lot_id) REFERENCES lots(id)
+            )
+        """)
+
+        # 1) Double-check pokrycia
         coverage = check_cc_coverage(cc_data['ticker'], cc_data['contracts'])
         if not coverage.get('can_cover'):
             conn.close()
             return {
-                'success': False, 
+                'success': False,
                 'message': f"Brak pokrycia: {coverage.get('message', 'Nieznany błąd')}"
             }
-        
-        # 2. PRZYGOTUJ DATY
+
+        # 2) Daty → str
         open_date_str = cc_data['open_date']
         if hasattr(open_date_str, 'strftime'):
             open_date_str = open_date_str.strftime('%Y-%m-%d')
-        
+
         expiry_date_str = cc_data['expiry_date']
         if hasattr(expiry_date_str, 'strftime'):
             expiry_date_str = expiry_date_str.strftime('%Y-%m-%d')
-        
-        # 3. ZAPISZ GŁÓWNY REKORD CC
+
+        # 3) INSERT do options_cc (9 kolumn ↔ 9 wartości)
         cursor.execute("""
             INSERT INTO options_cc (
                 ticker, contracts, strike_usd, premium_sell_usd,
                 open_date, expiry_date, status, fx_open, premium_sell_pln
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             cc_data['ticker'],
             cc_data['contracts'],
             cc_data['strike_usd'],
             cc_data['premium_sell_usd'],
-            cc_data.get('broker_fee', 0.00),     
-            cc_data.get('reg_fee', 0.00), 
             open_date_str,
             expiry_date_str,
-            'open',  # Status początkowy
+            'open',
             cc_data['fx_open'],
             cc_data['premium_sell_pln']
         ))
-        
         cc_id = cursor.lastrowid
-        
-        # 4. 🔥 NAPRAWIONA REZERWACJA AKCJI FIFO
+
+        # 4) Rezerwacja FIFO + zapis do options_cc_reservations
         shares_to_reserve = cc_data['contracts'] * 100
-        remaining_to_reserve = shares_to_reserve
-        
-        # Pobierz LOT-y FIFO z aktualnym quantity_open
+        remaining = shares_to_reserve
+
         cursor.execute("""
             SELECT id, quantity_open
-            FROM lots 
+            FROM lots
             WHERE ticker = ? AND quantity_open > 0
             ORDER BY buy_date, id
         """, (cc_data['ticker'],))
-        
-        available_lots = cursor.fetchall()
-        
-        print(f"🔧 REZERWACJA dla CC #{cc_id}:")
-        print(f"   Do zarezerwowania: {shares_to_reserve} akcji")
-        print(f"   Dostępne LOT-y: {len(available_lots)}")
-        
-        reserved_lots = []
-        
-        for lot_id, current_qty_open in available_lots:
-            if remaining_to_reserve <= 0:
+        lots_rows = cursor.fetchall()
+
+        for lot_id, qty_open in lots_rows:
+            if remaining <= 0:
                 break
-            
-            qty_to_reserve_from_lot = min(remaining_to_reserve, current_qty_open)
-            new_qty_open = current_qty_open - qty_to_reserve_from_lot
-            
-            # AKTUALIZUJ quantity_open w LOT-ach - KLUCZOWE!
+
+            take = min(remaining, qty_open)
+            new_open = qty_open - take
+
+            cursor.execute(
+                "UPDATE lots SET quantity_open = ? WHERE id = ?",
+                (new_open, lot_id)
+            )
+
             cursor.execute("""
-                UPDATE lots 
-                SET quantity_open = ?
-                WHERE id = ?
-            """, (new_qty_open, lot_id))
-            
-            reserved_lots.append({
-                'lot_id': lot_id,
-                'was_open': current_qty_open,
-                'reserved': qty_to_reserve_from_lot,
-                'now_open': new_qty_open
-            })
-            
-            remaining_to_reserve -= qty_to_reserve_from_lot
-            
-            print(f"   LOT #{lot_id}: {current_qty_open} -> {new_qty_open} (reserved: {qty_to_reserve_from_lot})")
-        
-        # Sprawdź czy udało się zarezerwować wszystkie
-        if remaining_to_reserve > 0:
+                INSERT INTO options_cc_reservations (cc_id, lot_id, qty_reserved)
+                VALUES (?, ?, ?)
+            """, (cc_id, lot_id, take))
+
+            remaining -= take
+
+        if remaining > 0:
             conn.rollback()
             conn.close()
-            return {
-                'success': False,
-                'message': f'Nie udało się zarezerwować {remaining_to_reserve} akcji'
-            }
-        
-        print(f"✅ Zarezerwowano {shares_to_reserve} akcji dla CC #{cc_id}")
-        print(f"   Użyto {len(reserved_lots)} LOT-ów")
-        
-        # 5. UTWÓRZ CASHFLOW (przychód z premium)
-# 5. UTWÓRZ CASHFLOW Z PROWIZJAMI (przychód NETTO z premium)
+            return {'success': False, 'message': f'Nie udało się zarezerwować {remaining} akcji'}
+
+        # 5. UTWÓRZ CASHFLOW – tylko NETTO (przychód po prowizjach)
         gross_premium_usd = cc_data['premium_sell_usd'] * cc_data['contracts'] * 100
         total_fees_usd = cc_data.get('broker_fee', 0.00) + cc_data.get('reg_fee', 0.00)
         net_premium_usd = gross_premium_usd - total_fees_usd
-        
-        cashflow_description = f"CC {cc_data['ticker']} {cc_data['contracts']}x ${cc_data['strike_usd']} premium ${gross_premium_usd:.2f} fees ${total_fees_usd:.2f}"
-        
+
+        cashflow_description = (
+            f"CC {cc_data['ticker']} {cc_data['contracts']}x ${cc_data['strike_usd']} "
+            f"premium ${gross_premium_usd:.2f} fees ${total_fees_usd:.2f} | "
+            f"FX NBP D-1: {cc_data.get('fx_open_date', '-')}"
+        )
+
         cursor.execute("""
             INSERT INTO cashflows (
                 type, amount_usd, date, fx_rate, amount_pln,
@@ -1342,55 +1335,37 @@ def save_covered_call_to_database(cc_data):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             'option_premium',
-            net_premium_usd,  # ✅ ZMIENIONE: kwota NETTO zamiast brutto
+            net_premium_usd,                     # << NETTO USD
             open_date_str,
-            cc_data['fx_open'],
-            round(net_premium_usd * cc_data['fx_open'], 2),  # ✅ PLN też netto
+            cc_data['fx_open'],                  # << kurs NBP (D-1) dla dnia sprzedaży
+            round(net_premium_usd * cc_data['fx_open'], 2),  # << NETTO PLN
             cashflow_description,
             'options_cc',
             cc_id
         ))
-        
-        cashflow_description = f"Sprzedaż {cc_data['contracts']} CC {cc_data['ticker']} @ ${cc_data['premium_sell_usd']:.2f}"
-        
-        cursor.execute("""
-            INSERT INTO cashflows (
-                type, amount_usd, date, fx_rate, amount_pln,
-                description, ref_table, ref_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            'option_premium',  # Typ dla premium CC
-            total_premium_usd,  # Dodatnia kwota (przychód)
-            open_date_str,
-            cc_data['fx_open'],
-            cc_data['premium_sell_pln'],
-            cashflow_description,
-            'options_cc',
-            cc_id
-        ))
-        
+
+
         conn.commit()
         conn.close()
-        
+
         return {
             'success': True,
             'cc_id': cc_id,
             'message': f'CC #{cc_id} zapisane pomyślnie!',
-            'reserved_details': reserved_lots
+            'reserved_shares': shares_to_reserve
         }
-        
+
     except Exception as e:
         if conn:
             conn.rollback()
             conn.close()
-        
-        import streamlit as st
-        st.error(f"Błąd zapisu CC: {e}")
-        
-        return {
-            'success': False,
-            'message': f'Błąd zapisu: {str(e)}'
-        }
+        try:
+            import streamlit as st
+            st.error(f"Błąd zapisu CC: {e}")
+        except Exception:
+            pass
+        return {'success': False, 'message': f'Błąd zapisu: {str(e)}'}
+
 
 
 # DODAJ TAKŻE FUNKCJĘ NAPRAWCZĄ:
@@ -2346,130 +2321,78 @@ def reset_ticker_reservations(ticker):
         
 # POPRAWKA PUNKT 63: Naprawiona funkcja delete_covered_call w db.py
 
-def delete_covered_call(cc_id, confirm_delete=False):
+def delete_covered_call(cc_id: int, confirm_delete: bool = False):
     """
-    PUNKT 63: Usuwa Covered Call z automatycznym zwalnianiem rezerwacji akcji
-    POPRAWKA: Użycie prawidłowej nazwy kolumny 'date' zamiast 'transaction_date'
+    Usuwa CC:
+      - zwalnia LOT-y wg zapisów w options_cc_reservations,
+      - usuwa powiązane cashflow (ref_table='options_cc', ref_id=cc_id),
+      - usuwa rekord z options_cc.
     """
+    if not confirm_delete:
+        return {'success': False, 'message': 'Brak potwierdzenia usunięcia'}
+
+    conn = None
     try:
         conn = get_connection()
         if not conn:
-            return {'success': False, 'message': 'Braz połączenia z bazą'}
-        
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
         cursor = conn.cursor()
-        
-        # KROK 1: Pobierz szczegóły CC
-        cursor.execute("""
-            SELECT id, ticker, contracts, status, premium_sell_usd, premium_sell_pln,
-                   open_date, expiry_date, close_date
-            FROM options_cc 
-            WHERE id = ?
-        """, (cc_id,))
-        
-        cc_data = cursor.fetchone()
-        if not cc_data:
+
+        # Pobierz bazowe info (do komunikatu)
+        cursor.execute("SELECT ticker, contracts, status FROM options_cc WHERE id = ?", (cc_id,))
+        row = cursor.fetchone()
+        if not row:
             conn.close()
-            return {'success': False, 'message': f'CC #{cc_id} nie znalezione'}
-        
-        cc_id, ticker, contracts, status, premium_sell_usd, premium_sell_pln, open_date, expiry_date, close_date = cc_data
-        shares_to_release = contracts * 100
-        
-        print(f"🗑️ USUWANIE CC #{cc_id}:")
-        print(f"   Ticker: {ticker}")
-        print(f"   Contracts: {contracts} = {shares_to_release} akcji")
-        print(f"   Status: {status}")
-        print(f"   Premium: ${premium_sell_usd} = {premium_sell_pln} PLN")
-        
-        # KROK 2: Sprawdź czy można usunąć
-        if status == 'open':
-            print("   ⚠️ CC jest otwarte - zwolnię rezerwacje akcji")
-        else:
-            print(f"   ✅ CC jest zamknięte ({status}) - bezpieczne usunięcie")
-        
-        # KROK 3: Jeśli CC otwarte, zwolnij rezerwacje akcji
-        if status == 'open':
-            print(f"   🔓 Zwalnianie {shares_to_release} akcji {ticker}...")
-            
-            # Pobierz LOT-y które mogą być zarezerwowane (quantity_open < quantity_total)
-            cursor.execute("""
-                SELECT id, quantity_total, quantity_open
-                FROM lots 
-                WHERE ticker = ? AND quantity_open < quantity_total
-                ORDER BY buy_date, id
-            """, (ticker,))
-            
-            reserved_lots = cursor.fetchall()
-            remaining_to_release = shares_to_release
-            
-            for lot_id, qty_total, qty_open in reserved_lots:
-                if remaining_to_release <= 0:
-                    break
-                
-                # Ile można zwolnić z tego LOT-a?
-                reserved_in_lot = qty_total - qty_open
-                qty_to_release = min(remaining_to_release, reserved_in_lot)
-                new_qty_open = qty_open + qty_to_release
-                
-                # Nie może przekroczyć quantity_total
-                if new_qty_open > qty_total:
-                    qty_to_release = qty_total - qty_open
-                    new_qty_open = qty_total
-                
-                if qty_to_release > 0:
-                    cursor.execute("""
-                        UPDATE lots SET quantity_open = ? WHERE id = ?
-                    """, (new_qty_open, lot_id))
-                    
-                    remaining_to_release -= qty_to_release
-                    print(f"     LOT #{lot_id}: {qty_open} -> {new_qty_open} (+{qty_to_release})")
-            
-            if remaining_to_release > 0:
-                print(f"   ⚠️ UWAGA: Nie udało się zwolnić {remaining_to_release} akcji - może być problem z danymi")
-        
-        # KROK 4: Znajdź i usuń powiązane cashflow
-        # POPRAWKA: Używamy kolumny 'date' zamiast 'transaction_date'
+            return {'success': False, 'message': f'CC #{cc_id} nie istnieje'}
+
+        ticker, contracts, status = row[0], row[1], row[2]
+
+        # 1) ZWOLNIJ REZERWACJE
         cursor.execute("""
-            SELECT id, amount_usd, amount_pln, date
-            FROM cashflows 
+            SELECT lot_id, qty_reserved
+            FROM options_cc_reservations
+            WHERE cc_id = ?
+            ORDER BY id
+        """, (cc_id,))
+        reservations = cursor.fetchall()
+
+        shares_released = 0
+        for lot_id, qty_reserved in reservations:
+            cursor.execute("UPDATE lots SET quantity_open = quantity_open + ? WHERE id = ?",
+                           (qty_reserved, lot_id))
+            shares_released += qty_reserved
+
+        # skasuj zapisy rezerwacji
+        cursor.execute("DELETE FROM options_cc_reservations WHERE cc_id = ?", (cc_id,))
+
+        # 2) USUŃ POWIĄZANE CASHFLOW
+        cursor.execute("""
+            DELETE FROM cashflows
             WHERE ref_table = 'options_cc' AND ref_id = ?
         """, (cc_id,))
-        
-        related_cashflows = cursor.fetchall()
-        if related_cashflows:
-            print(f"   💸 Usuwanie {len(related_cashflows)} powiązanych cashflow:")
-            for cf_id, amount_usd, amount_pln, cf_date in related_cashflows:
-                print(f"     Cashflow #{cf_id}: ${amount_usd} ({amount_pln} PLN) z {cf_date}")
-                cursor.execute("DELETE FROM cashflows WHERE id = ?", (cf_id,))
-        
-        # KROK 5: Usuń CC
+
+        # 3) USUŃ CC
         cursor.execute("DELETE FROM options_cc WHERE id = ?", (cc_id,))
-        
+
         conn.commit()
         conn.close()
-        
+
         return {
             'success': True,
-            'message': f'CC #{cc_id} usunięte pomyślnie',
+            'message': f'Usunięto CC #{cc_id} ({ticker}); zwolniono {shares_released} akcji',
             'details': {
                 'ticker': ticker,
-                'contracts': contracts,
-                'shares_released': shares_to_release if status == 'open' else 0,
-                'status_was': status,
-                'premium_usd': premium_sell_usd,
-                'premium_pln': premium_sell_pln,
-                'cashflows_deleted': len(related_cashflows)
+                'shares_released': shares_released,
+                'status_prev': status,
+                'cashflows_deleted': True
             }
         }
-        
+
     except Exception as e:
         if conn:
             conn.rollback()
             conn.close()
-        
-        return {
-            'success': False,
-            'message': f'Błąd usuwania CC #{cc_id}: {str(e)}'
-        }
+        return {'success': False, 'message': f'Błąd usuwania CC #{cc_id}: {str(e)}'}
 
 
 def get_deletable_cc_list():
@@ -3114,6 +3037,111 @@ def get_cc_performance_summary():
         print(f"Błąd get_cc_performance_summary: {e}")
         return {}
 
+def get_reservations_diagnostics():
+    """
+    Diagnostyka rezerwacji pod otwarte CC:
+      - per ticker: required_reserved vs actual_reserved (z LOT-ów),
+      - per CC: oczekiwana rezerwa vs zmapowana w options_cc_reservations (jeśli istnieje).
+    Zwraca dict:
+      {
+        'success': True,
+        'has_mapping_table': bool,
+        'tickers': [{'ticker', 'required_reserved', 'actual_reserved', 'delta'}...],
+        'ccs': [{
+            'id','ticker','open_date',
+            'expected_reserved',
+            'mapped_reserved': int|None,
+            'mapped_details': [{'lot_id','qty_reserved'}...]
+        }...]
+      }
+    """
+    conn = get_connection()
+    if not conn:
+        return {'success': False, 'message': 'Brak połączenia z bazą', 'has_mapping_table': False}
+
+    cursor = conn.cursor()
+
+    # Czy istnieje tabela mapowań?
+    cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='options_cc_reservations' LIMIT 1")
+    has_mapping = cursor.fetchone() is not None
+
+    # TICKERY z otwartymi CC
+    cursor.execute("SELECT DISTINCT ticker FROM options_cc WHERE status='open' ORDER BY ticker")
+    tickers = [row[0] for row in cursor.fetchall()]
+
+    out = {
+        'success': True,
+        'has_mapping_table': has_mapping,
+        'tickers': [],
+        'ccs': []
+    }
+
+    # Poziom tickerów
+    for t in tickers:
+        # Wymagana rezerwa = suma kontraktów * 100
+        cursor.execute("""
+            SELECT COALESCE(SUM(contracts),0) * 100
+            FROM options_cc
+            WHERE status='open' AND ticker=?
+        """, (t,))
+        required = int(cursor.fetchone()[0] or 0)
+
+        # Faktyczna rezerwa z LOT-ów = SUM(quantity_total - quantity_open)
+        cursor.execute("""
+            SELECT COALESCE(SUM(quantity_total),0), COALESCE(SUM(quantity_open),0)
+            FROM lots WHERE ticker=?
+        """, (t,))
+        tot, opn = cursor.fetchone()
+        tot = int(tot or 0)
+        opn = int(opn or 0)
+        actual = tot - opn
+
+        out['tickers'].append({
+            'ticker': t,
+            'required_reserved': required,
+            'actual_reserved': actual,
+            'delta': actual - required
+        })
+
+    # Poziom CC
+    cursor.execute("""
+        SELECT id, ticker, contracts, open_date
+        FROM options_cc
+        WHERE status='open'
+        ORDER BY open_date, id
+    """)
+    cc_rows = cursor.fetchall()
+
+    for cc_id, t, contracts, open_date in cc_rows:
+        expected = int((contracts or 0) * 100)
+        mapped = None
+        details = []
+
+        if has_mapping:
+            cursor.execute("""
+                SELECT lot_id, qty_reserved
+                FROM options_cc_reservations
+                WHERE cc_id=?
+                ORDER BY id
+            """, (cc_id,))
+            rows = cursor.fetchall()
+            if rows:
+                mapped = sum(int(r[1]) for r in rows)
+                details = [{'lot_id': r[0], 'qty_reserved': int(r[1])} for r in rows]
+            else:
+                mapped = 0
+
+        out['ccs'].append({
+            'id': cc_id,
+            'ticker': t,
+            'open_date': open_date,
+            'expected_reserved': expected,
+            'mapped_reserved': mapped,
+            'mapped_details': details
+        })
+
+    conn.close()
+    return out
 
 # Test na końcu pliku (opcjonalny)
 if __name__ == "__main__":

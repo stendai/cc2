@@ -49,11 +49,12 @@ def show_options():
         st.error(f"❌ Błąd systemu: {e}")
     
     # CLEANUP: Zakładki bez zmian (już zrobione w punkcie 65)
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🎯 Sprzedaż CC", 
         "💰 Buyback & Expiry", 
         "📊 Otwarte CC", 
-        "📋 Historia CC"
+        "📋 Historia CC",
+        "🛠️ Diagnostyka"
     ])
     
     with tab1:
@@ -67,6 +68,9 @@ def show_options():
     
     with tab4:
         show_cc_history_tab()  # Nowa wersja z PUNKT 67
+        
+    with tab5:
+        show_reservations_diagnostics_tab()
 
 def show_sell_cc_tab():
     """Tab sprzedaży Covered Calls - PUNKTY 53-54: Kompletny formularz"""
@@ -399,7 +403,10 @@ def show_cc_sell_preview(form_data):
         'open_date': sell_date,
         'expiry_date': expiry_date,
         'fx_open': fx_rate,
-        'premium_sell_pln': total_premium_pln,
+        'fx_open_date': fx_date, 
+        'premium_sell_pln': net_premium_pln,
+        'broker_fee': broker_fee,      # <— DODANE
+        'reg_fee': reg_fee,            # <— DODANE
         'coverage': coverage
     }
     
@@ -1512,6 +1519,69 @@ def show_bulk_operations_section():
     
     else:
         st.info("☑️ Zaznacz CC do operacji masowych")
+
+def show_reservations_diagnostics_tab():
+    """
+    Diagnostyka rezerwacji CC ↔ LOT (FIFO) + spójność tabeli options_cc_reservations.
+    """
+    import streamlit as st
+    st.subheader("🛠️ Diagnostyka rezerwacji CC ↔ LOT")
+
+    try:
+        diag = db.get_reservations_diagnostics()
+    except Exception as e:
+        st.error(f"❌ Błąd diagnostyki: {e}")
+        return
+
+    if not diag.get('success'):
+        st.error(f"❌ {diag.get('message','Nieznany błąd')}")
+        return
+
+    has_map = diag.get('has_mapping_table', False)
+    if has_map:
+        st.info("📦 Tabela mapowań: **options_cc_reservations** → ✅ istnieje")
+    else:
+        st.warning("📦 Tabela mapowań: **options_cc_reservations** → ❌ brak (mapuję tylko na podstawie LOT-ów)\n\n"
+                   "Uruchom skrypt `db_fix_cc_reservations.py --apply`, aby ją odbudować.")
+
+    st.markdown("### 📊 Poziom Tickerów")
+    rows = []
+    for r in diag.get('tickers', []):
+        status = "✅ OK" if r['delta'] == 0 else ("🔻 za mało" if r['delta'] < 0 else "🔺 za dużo")
+        rows.append({
+            "Ticker": r['ticker'],
+            "Wymagane (kontr.*100)": r['required_reserved'],
+            "Faktycznie z LOT-ów": r['actual_reserved'],
+            "Delta": r['delta'],
+            "Status": status
+        })
+    if rows:
+        st.dataframe(rows, use_container_width=True)
+    else:
+        st.info("Brak otwartych CC.")
+
+    st.markdown("### 🔎 Poziom CC (mapowanie LOT-ów)")
+    for cc in diag.get('ccs', []):
+        expected = cc['expected_reserved']
+        mapped = cc.get('mapped_reserved')
+        hdr = f"CC #{cc['id']} – {cc['ticker']} – oczekiwane {expected} akcji"
+        if mapped is None:
+            hdr = "ℹ️ " + hdr + " | brak tabeli mapowań"
+        else:
+            emoji = "✅" if mapped == expected else "🟠"
+            hdr = f"{emoji} {hdr} | zmapowane {mapped}"
+
+        with st.expander(hdr, expanded=(mapped is not None and mapped != expected)):
+            st.write(f"📅 Open: {cc['open_date']}")
+            if mapped is None:
+                st.warning("Brak danych mapowania. Odbuduj `options_cc_reservations` naprawczym skryptem.")
+            else:
+                lot_rows = [{"LOT ID": d['lot_id'], "Zarezerwowane": d['qty_reserved']} for d in cc.get('mapped_details', [])]
+                if lot_rows:
+                    st.dataframe(lot_rows, use_container_width=True)
+                else:
+                    st.info("Brak wpisów mapowania dla tej CC.")
+
 
 if __name__ == "__main__":
     show_options()  
