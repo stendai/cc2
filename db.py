@@ -1253,12 +1253,14 @@ def save_covered_call_to_database(cc_data):
             INSERT INTO options_cc (
                 ticker, contracts, strike_usd, premium_sell_usd,
                 open_date, expiry_date, status, fx_open, premium_sell_pln
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             cc_data['ticker'],
             cc_data['contracts'],
             cc_data['strike_usd'],
             cc_data['premium_sell_usd'],
+            cc_data.get('broker_fee', 0.00),     
+            cc_data.get('reg_fee', 0.00), 
             open_date_str,
             expiry_date_str,
             'open',  # Status początkowy
@@ -1326,7 +1328,28 @@ def save_covered_call_to_database(cc_data):
         print(f"   Użyto {len(reserved_lots)} LOT-ów")
         
         # 5. UTWÓRZ CASHFLOW (przychód z premium)
-        total_premium_usd = cc_data['premium_sell_usd'] * cc_data['contracts'] * 100
+# 5. UTWÓRZ CASHFLOW Z PROWIZJAMI (przychód NETTO z premium)
+        gross_premium_usd = cc_data['premium_sell_usd'] * cc_data['contracts'] * 100
+        total_fees_usd = cc_data.get('broker_fee', 0.00) + cc_data.get('reg_fee', 0.00)
+        net_premium_usd = gross_premium_usd - total_fees_usd
+        
+        cashflow_description = f"CC {cc_data['ticker']} {cc_data['contracts']}x ${cc_data['strike_usd']} premium ${gross_premium_usd:.2f} fees ${total_fees_usd:.2f}"
+        
+        cursor.execute("""
+            INSERT INTO cashflows (
+                type, amount_usd, date, fx_rate, amount_pln,
+                description, ref_table, ref_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            'option_premium',
+            net_premium_usd,  # ✅ ZMIENIONE: kwota NETTO zamiast brutto
+            open_date_str,
+            cc_data['fx_open'],
+            round(net_premium_usd * cc_data['fx_open'], 2),  # ✅ PLN też netto
+            cashflow_description,
+            'options_cc',
+            cc_id
+        ))
         
         cashflow_description = f"Sprzedaż {cc_data['contracts']} CC {cc_data['ticker']} @ ${cc_data['premium_sell_usd']:.2f}"
         

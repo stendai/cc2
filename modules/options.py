@@ -137,21 +137,46 @@ def show_sell_cc_tab():
                     format="%.2f",
                     help="Premium za sprzedaż CC (za akcję)"
                 )
-                
-                # Data expiry
-                expiry_date = st.date_input(
-                    "Data expiry:",
-                    value=date.today() + timedelta(days=30),
-                    min_value=date.today() + timedelta(days=1),
-                    help="Data wygaśnięcia opcji"
+                        # ✅ DODAJ PROWIZJE W OSOBNEJ SEKCJI:
+            st.markdown("**💰 Prowizje brokerskie:**")
+            col_fee1, col_fee2 = st.columns(2)
+
+            with col_fee1:
+                broker_fee = st.number_input(
+                    "Prowizja brokera USD:",
+                    min_value=0.00,
+                    value=1.00,
+                    step=0.01,
+                    format="%.2f",
+                    help="Prowizja IBKR za sprzedaż opcji"
                 )
-            
-            # Data sprzedaży
-            sell_date = st.date_input(
-                "Data sprzedaży CC:",
-                value=date.today(),
-                help="Data transakcji sprzedaży"
-            )
+
+            with col_fee2:
+                reg_fee = st.number_input(
+                    "Opłaty regulacyjne USD:",
+                    min_value=0.00,
+                    value=0.15,
+                    step=0.01,
+                    format="%.2f", 
+                    help="Regulatory fees (SEC, FINRA)"
+                )
+
+
+            # Po prowizjach
+            st.markdown("**📅 Harmonogram:**")
+            col_dates1, col_dates2 = st.columns(2)
+
+            with col_dates1:
+                sell_date = st.date_input(
+                    "Data sprzedaży:",
+                    value=date.today() - timedelta(days=30)
+                )
+
+            with col_dates2:
+                expiry_date = st.date_input(
+                    "Data expiry:", 
+                    value=date.today() + timedelta(days=30)
+                )
             
             # Przycisk sprawdzenia pokrycia
             check_coverage = st.form_submit_button("🔍 Sprawdź pokrycie i podgląd", use_container_width=True)
@@ -163,6 +188,8 @@ def show_sell_cc_tab():
                 'contracts': contracts,
                 'strike_price': strike_price,
                 'premium_received': premium_received,
+                'broker_fee': broker_fee,
+                'reg_fee': reg_fee,
                 'expiry_date': expiry_date,
                 'sell_date': sell_date
             }
@@ -316,7 +343,18 @@ def show_cc_sell_preview(form_data):
     with col_preview2:
         st.markdown("**💰 Kalkulacje USD:**")
         st.write(f"💵 **Premium/akcja**: ${premium_received:.2f}")
-        st.write(f"🎯 **Premium łączna**: ${total_premium_usd:.2f}")
+        
+        # ✅ DODAJ SZCZEGÓŁY Z PROWIZJAMI:
+        broker_fee = form_data.get('broker_fee', 0.00)
+        reg_fee = form_data.get('reg_fee', 0.00)
+        total_fees = broker_fee + reg_fee
+        net_premium_usd = total_premium_usd - total_fees
+        
+        st.write(f"🎯 **Premium brutto**: ${total_premium_usd:.2f}")
+        st.write(f"💸 **Broker fee**: ${broker_fee:.2f}")
+        st.write(f"📋 **Reg fee**: ${reg_fee:.2f}")
+        st.write(f"💰 **Razem prowizje**: ${total_fees:.2f}")
+        st.success(f"**💚 Premium NETTO: ${net_premium_usd:.2f}**")
         st.write(f"📅 **Data sprzedaży**: {sell_date}")
         
         if fx_success:
@@ -326,15 +364,13 @@ def show_cc_sell_preview(form_data):
     
     with col_preview3:
         st.markdown("**🇵🇱 Przeliczenie PLN:**")
-        st.write(f"💰 **Premium PLN**: {total_premium_pln:.2f} zł")
-        st.write(f"📊 **PLN/kontrakt**: {total_premium_pln/contracts:.2f} zł")
+        # ✅ DODAJ NETTO PLN:
+        net_premium_pln = net_premium_usd * fx_rate
+        fees_pln = total_fees * fx_rate
         
-        # Dni do expiry
-        days_to_expiry = (expiry_date - sell_date).days
-        st.write(f"📅 **Dni do expiry**: {days_to_expiry}")
-        
-        if days_to_expiry <= 3:
-            st.warning("⚠️ Krótkie expiry!")
+        st.write(f"💰 **Premium brutto PLN**: {total_premium_pln:.2f} zł")
+        st.write(f"💸 **Prowizje PLN**: {fees_pln:.2f} zł")
+        st.success(f"**💚 Premium NETTO PLN: {net_premium_pln:.2f} zł**")
     
     # Alokacja FIFO
     st.markdown("---")
