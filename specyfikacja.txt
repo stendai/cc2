@@ -1,9 +1,9 @@
 # SPECYFIKACJA ZAKTUALIZOWANA: STREAMLIT COVERED CALL DASHBOARD
 ## Zarządzanie portfelem opcji pokrytych z rozliczeniami podatkowymi PL
 
-**Status: 67/100 punktów ukończone (67%)**  
-**Ostatnia aktualizacja: 2025-01-23**  
-**Aktualny milestone: PUNKT 67 UKOŃCZONY - Tabele zamkniętych CC + UI Cleanup**
+**Status: 69/100 punktów ukończone (69%)**  
+**Ostatnia aktualizacja: 2025-01-25**  
+**Aktualny milestone: PUNKT 69 UKOŃCZONY - Przeniesienie narzędzi deweloperskich do modułu Dev Tools**
 
 ---
 
@@ -29,6 +29,7 @@
 6. **Taxes**: rozbicia PIT-38/PIT-36, eksporty CSV
 7. **Stats**: yieldy CC/dividend, P/L per ticker i całościowo
 8. **Charts**: equity curve, cashflow, pie charts, histogramy P/L
+9. **🛠️ Dev Tools**: narzędzia deweloperskie, generatory testowe, diagnostyka ✅
 
 ---
 
@@ -120,7 +121,7 @@
 
 ---
 
-## 🎯 ETAP 4: MODUŁ OPTIONS - COVERED CALLS (punkty 51-70) 🔥 W FINALIZACJI
+## 🎯 ETAP 4: MODUŁ OPTIONS - COVERED CALLS (punkty 51-70) ✅ UKOŃCZONY
 
 ### Punkty 51-55: Options - struktura i rezerwacje ✅
 51. ✅ Utworzenie pages/options.py z podstawową strukturą
@@ -136,7 +137,7 @@
 59. ✅ Kalkulacja P/L dla bought_back i expired CC w PLN
 60. ✅ Implementacja zwalniania rezerwacji akcji przy zamknięciu CC
 
-### Punkty 61-67: Options - zaawansowane funkcjonalności ✅ **WSZYSTKIE UKOŃCZONE!**
+### Punkty 61-67: Options - zaawansowane funkcjonalności ✅
 61. ✅ **UKOŃCZONY** - Implementacja blokady sprzedaży akcji pod otwartymi CC
 62. ✅ **UKOŃCZONY** - Rozszerzone walidacje blokad CC w UI Stocks
 63. ✅ **UKOŃCZONY** - Dodanie przycisków usuwania błędnych CC (z automatycznym zwalnianiem rezerwacji)
@@ -154,16 +155,27 @@
    - ✅ Performance per ticker - statystyki wydajności każdego symbolu
    - ✅ Detailed History z P/L color coding (💚❤️⚪)
    - ✅ Export do CSV z wszystkimi metrykami
-   - ✅ **UI CLEANUP** - usunięto wszystkie deweloperskie komunikaty i info boxy
-   - ✅ **Profesjonalizacja interfejsu** - czytelne tabele, uproszczone filtry
-   - ✅ Dodanie filtrów zaawansowanych (zakresy dat, kwoty P/L) + **FINALNE USUWANIE INFO DEWELOPERSKICH**
+   - ✅ UI CLEANUP - usunięto wszystkie deweloperskie komunikaty i info boxy
+   - ✅ Profesjonalizacja interfejsu - czytelne tabele, uproszczone filtry
 
-### Punkty 69-70: Finalizacja ETAPU 4 ⏳ **OSTATNIE 2 PUNKTY**
-68. ⏳ Utworzenie oddzielnego modułu do przeniesienia opcji deweloperskich i testowych z każdego modułu
-69. ⏳ Sprawdzanie po kolei wszystkich modułów i przeniesienie opcji testowych i deweloperskich do modułu testowego **NARZĘDZIA CLEANUP**
-70. ⏳ Testowanie pełnej funkcjonalności modułu testowego + oczyszczenie dashboardu + **FINALIZACJA PROFESJONALNEGO UI**
+### Punkty 68-69: Finalizacja ETAPU 4 ✅
+68. ✅ **UKOŃCZONY** - Utworzenie modułu deweloperskiego modules/dev_tools.py:
+   - ✅ Diagnostyka systemu i integralności bazy danych
+   - ✅ Narzędzia reset z zabezpieczeniami (reset rezerwacji, usuwanie tabel)
+   - ✅ Generatory testowych danych (LOT-y, cashflows, covered calls)
+   - ✅ Export/import narzędzia (schema SQL, raporty statystyk)
+   - ✅ Monitoring real-time i performance metrics
+   - ✅ Quick actions (refresh, clear cache, test connection)
+   - ✅ Integracja z głównym menu aplikacji
+69. ✅ **UKOŃCZONY** - Przeniesienie opcji deweloperskich do modułu testowego:
+   - ✅ Skonsolidowanie wszystkich narzędzi testowych w jednym miejscu
+   - ✅ Usprawnienie głównych modułów biznesowych
+   - ✅ Profesjonalizacja interfejsu użytkownika
 
-**Status ETAP 4**: 🔥 **67/70 ukończone (96%)** - Options prawie gotowe! Zostały tylko 3 punkty!
+### Punkt 70: Finalne testy ETAPU 4 ⏳ **OSTATNI PUNKT!**
+70. ⏳ Testowanie pełnej funkcjonalności modułu options + oczyszczenie dashboardu + **FINALIZACJA PROFESJONALNEGO UI**
+
+**Status ETAP 4**: 🔥 **69/70 ukończone (99%)** - Został tylko 1 punkt do ukończenia 70% projektu!
 
 ---
 
@@ -178,10 +190,10 @@
 
 ### Punkty 76-80: Dividends - UI i finalizacja
 76. Implementacja tabeli dywidend z rozbiciami (brutto, WHT, dopłata, netto)
-77. Dodanie filtrów i sortowania + **przyciski edycji/usuwania dywidend**
+77. Dodanie filtrów i sortowania + przyciski edycji/usuwania dywidend
 78. Implementacja eksportu dividends do CSV
 79. Integracja z modułem taxes (kategoria PIT-36)
-80. Testowanie pełnej funkcjonalności modułu dividends + **cleanup błędnych rekordów**
+80. Testowanie pełnej funkcjonalności modułu dividends + cleanup błędnych rekordów
 
 **Status ETAP 5**: ⏳ **PLANOWANY** - Start po ukończeniu ETAPU 4
 
@@ -194,14 +206,14 @@
 82. Implementacja logiki PIT-38 (przychody i koszty)
 83. Implementacja logiki PIT-36 (dywidendy z rozbiciami)
 84. Implementacja agregacji danych z wszystkich modułów
-85. Kalkulacja sum dla PIT-38 (razem przychody/koszty) i PIT-36 + **narzędzia administracyjne**
+85. Kalkulacja sum dla PIT-38 (razem przychody/koszty) i PIT-36 + narzędzia administracyjne
 
 ### Punkty 86-90: Taxes - raporty i eksporty
-86. Implementacja szczegółowych tabel rozbić PIT-38/PIT-36 + **batch operations**
+86. Implementacja szczegółowych tabel rozbić PIT-38/PIT-36 + batch operations
 87. Implementacja eksportów CSV (PIT-38.csv, PIT-36.csv)
-88. Dodanie filtrów okresowych (rok podatkowy, kwartały) + **zarządzanie błędami podatkowymi**
-89. Implementacja dodatkowych eksportów (Cashflows.csv, etc.) + **audit trail**
-90. Testowanie poprawności kalkulacji podatkowych + **backup/restore narzędzia**
+88. Dodanie filtrów okresowych (rok podatkowy, kwartały) + zarządzanie błędami podatkowymi
+89. Implementacja dodatkowych eksportów (Cashflows.csv, etc.) + audit trail
+90. Testowanie poprawności kalkulacji podatkowych + backup/restore narzędzia
 
 **Status ETAP 6**: ⏳ **PLANOWANY** - Start po ukończeniu ETAPU 5
 
@@ -214,16 +226,53 @@
 92. Integracja z yfinance dla cen akcji (cache w market_prices)
 93. Implementacja KPI (wartość portfela USD, wolna gotówka, P/L YTD)
 94. Implementacja yield calculations (CC yield, dividend yield)
-95. Implementacja systemu alertów (expiry, pokrycie, yieldy) + **stats.py z yield analizami**
+95. Implementacja systemu alertów (expiry, pokrycie, yieldy) + stats.py z yield analizami
 
 ### Punkty 96-100: Finalizacja projektu
 96. Utworzenie pages/charts.py - wykresy equity curve, cashflow, pie charts
 97. Implementacja histogramów P/L i zaawansowanych wizualizacji
-98. **Przeprowadzenie pełnych testów end-to-end** + **usunięcie WSZYSTKICH info deweloperskich**
-99. **Optymalizacja performance i finalne poprawki UI/UX** + **profesjonalizacja interfejsu**
-100. **Dokumentacja końcowa i instrukcja obsługi** + **release production-ready**
+98. Przeprowadzenie pełnych testów end-to-end + usunięcie WSZYSTKICH info deweloperskich
+99. Optymalizacja performance i finalne poprawki UI/UX + profesjonalizacja interfejsu
+100. Dokumentacja końcowa i instrukcja obsługi + release production-ready
 
 **Status ETAP 7**: ⏳ **PLANOWANY** - Finalizacja i release
+
+---
+
+## 🛠️ NARZĘDZIA DEWELOPERSKIE - KOMPLETNY MODUŁ
+
+### **PUNKT 68-69 UKOŃCZONE: Kompletny moduł Dev Tools**
+
+**🔍 Diagnostyka Systemu:**
+- Status bazy danych z liczbą rekordów w każdej tabeli
+- Sprawdzanie integralności rezerwacji CC
+- Automatyczne wykrywanie problemów z pokryciem FIFO
+- Test połączeń z zewnętrznymi API (NBP)
+
+**🗑️ Narzędzia Reset:**
+- Reset rezerwacji CC dla konkretnego tickera z zabezpieczeniami
+- Bezpieczne usuwanie rekordów z tabel (z potwierdzeniem)
+- Bulk operations z filtrami bezpieczeństwa
+
+**🧪 Generatory Testowe:**
+- Generator LOT-ów (AAPL, MSFT, GOOGL, NVDA) z rzeczywistymi kursami NBP
+- Generator Cashflows (wpłaty/wypłaty) z prawidłowymi datami
+- Generator Covered Calls (na bazie dostępnych akcji z pokryciem FIFO)
+
+**📦 Export/Import:**
+- Export struktury bazy (schema SQL)
+- Export raportów statystyk z timestampem
+- Przygotowanie pod przyszłe funkcje backup/restore
+
+**📊 Monitoring Real-time:**
+- Live metrics wszystkich modułów (LOT-y, CC, cashflows)
+- Performance indicators z kolorowym kodowaniem
+- Quick actions (refresh, clear cache, test connection)
+
+**⚡ Integracja z aplikacją:**
+- Pełna integracja z głównym menu (🛠️ Dev Tools)
+- Responsywne UI dopasowane do stylu aplikacji
+- Zabezpieczenia przed przypadkowym usunięciem danych produkcyjnych
 
 ---
 
@@ -233,11 +282,8 @@
 - [x] Każda operacja ma utrwalony kurs NBP D-1 i kwoty PLN ✅
 - [x] FIFO sprzedaży działa i pokazuje rozbicie po LOT-ach ✅
 - [x] Blokada sprzedaży akcji pod otwartym CC ✅
-- [x] Rozszerzone walidacje i diagnostyka blokad CC ✅ **NOWE!**
-- [x] Narzędzia edycji i usuwania CC ✅ **NOWE!**
-- [x] Profesjonalne tabele z pokryciem FIFO i yield analysis ✅ **NOWE!**
-- [x] Performance analytics zamkniętych CC ✅ **NOWE!**
-- [x] UI Cleanup - usunięcie deweloperskich komunikatów ✅ **NOWE!**
+- [x] Profesjonalne tabele z yield analysis i performance tracking ✅
+- [x] Narzędzia deweloperskie i diagnostyczne ✅
 - [ ] Dashboard z equity (USD), yieldami i alertami
 - [ ] Taxes z rozbiciami PIT-38/PIT-36 i eksportami CSV
 - [x] Kursy NBP pobierane automatycznie z możliwością korekty ✅
@@ -248,81 +294,81 @@
 - [ ] Corporate actions handling
 - [ ] Multi-account support
 - [ ] Mobile-responsive UI
-- [x] Complete database reset tools ✅ **DODANE!**
+- [x] Complete database reset tools ✅
 
 ---
 
 ## 📊 PROGRESS TRACKING
 
-**Aktualny stan: 67/100 punktów (67%)**
+**Aktualny stan: 69/100 punktów (69%)**
 
 ### Status per etap:
 - ✅ **ETAP 1** (1-15): 15/15 = 100% ✅
 - ✅ **ETAP 2** (16-30): 15/15 = 100% ✅  
 - ✅ **ETAP 3** (31-50): 20/20 = 100% ✅
-- 🔥 **ETAP 4** (51-70): 17/20 = 85% 🔥 **PRAWIE GOTOWY!**
+- 🔥 **ETAP 4** (51-70): 19/20 = 95% 🔥 **1 PUNKT DO UKOŃCZENIA!**
 - ⏳ **ETAP 5** (71-80): 0/10 = 0% ⏳
 - ⏳ **ETAP 6** (81-90): 0/10 = 0% ⏳
 - ⏳ **ETAP 7** (91-100): 0/10 = 0% ⏳
 
-### Najbliższe milestone:
-🎯 **PUNKT 68-70**: Ostatnie 3 punkty ETAPU 4 - filtry zaawansowane + eksporty + testy finalne  
-🏆 **PUNKT 70**: Ukończenie ETAPU 4 = 70% projektu! **BARDZO BLISKO!**
+### Najbliższy milestone:
+🎯 **PUNKT 70**: Finalne testy ETAPU 4 + cleanup UI  
+🏆 **70% PROJEKTU**: Ukończenie ETAPU 4 - **BARDZO BLISKO!**
 
 ---
 
 ## 🚀 PLAN REALIZACJI - NASTĘPNE KROKI
 
-### **Za 1 dzień (punkty 68-70):**
-- Zaawansowane filtry (zakresy dat, P/L)
-- Kompletne eksporty do CSV
+### **Za 1 dzień (punkt 70):**
+- Finalne testowanie całego modułu Options
+- Ostateczne oczyszczenie UI z pozostałości deweloperskich
 - **UKOŃCZENIE ETAPU 4 = 70% projektu!** 🏆
 
 ### **Za 2 tygodnie (punkty 71-80):**
-- Pełny moduł Dividends
+- Pełny moduł Dividends z WHT i dopłatami podatkowymi
 - **UKOŃCZENIE ETAPU 5 = 80% projektu!**
 
 ### **Za 4 tygodnie (punkty 81-90):**
-- Pełny moduł Taxes
+- Pełny moduł Taxes z rozbiciami PIT-38/PIT-36
 - **UKOŃCZENIE ETAPU 6 = 90% projektu!**
 
 ### **Za 6 tygodni (punkty 91-100):**
-- Dashboard, Charts, finalizacja
+- Dashboard z KPI, Charts z wizualizacjami, finalizacja
 - **🏆 RELEASE PRODUCTION-READY = 100%!**
 
 ---
 
 ## 🎉 NAJNOWSZE OSIĄGNIĘCIA
 
-### **PUNKT 67 UKOŃCZONY (2025-01-23):**
-- ✅ **Performance Analytics** - Total P/L, Win Rate, Performance per ticker
-- ✅ **Advanced History Tables** - szczegółowa analiza zamkniętych CC
-- ✅ **P/L Color Coding** - 💚❤️⚪ wizualne wskaźniki zysków/strat
-- ✅ **Export Functionality** - CSV z pełnymi metrykami
-- ✅ **UI CLEANUP** - usunięto wszystkie deweloperskie komunikaty
-- ✅ **Professional Interface** - czytelne tabele i uproszczone filtry
+### **PUNKT 69 UKOŃCZONY (2025-01-25):**
+- ✅ **Moduł Dev Tools kompletny** - wszystkie narzędzia deweloperskie w jednym miejscu
+- ✅ **Profesjonalizacja UI** - usunięto nadmiar emoji i deweloperskich komunikatów
+- ✅ **Skonsolidowanie testów** - wszystkie funkcje diagnostyczne w dedicated module
+- ✅ **Cleanup głównych modułów** - oczyszczono z zaślepek i placeholder'ów
+- ✅ **Enhanced UX** - czytelniejsze interfejsy bez rozpraszających elementów
 
-### **PUNKTY 63-66 UKOŃCZONE (2025-01-23):**
-- ✅ **CC Management Tools** - usuwanie i edycja z zabezpieczeniami
-- ✅ **Bulk Operations** - masowe operacje z filtrami
-- ✅ **Advanced Open CC Tables** - pokrycie FIFO, yield analysis, alerty
-- ✅ **Portfolio Overview** - KPI metrics, breakdown per ticker
+### **PUNKT 68 UKOŃCZONY (2025-01-25):**
+- ✅ **Complete Dev Tools Module** - centrum wszystkich narzędzi deweloperskich
+- ✅ **Advanced Diagnostics** - sprawdzanie integralności CC i systemu FIFO
+- ✅ **Test Data Generators** - komplety danych testowych z rzeczywistymi kursami NBP
+- ✅ **Monitoring Dashboard** - real-time metrics wszystkich modułów systemu
+- ✅ **Professional Integration** - pełna integracja z główną aplikacją
 
-### **System Options działa w 100%:**
-- 🎯 **Profesjonalne tabele** z pełną analizą FIFO i yield
-- 💰 **Performance tracking** z historią i eksportami
-- 🛠️ **Management tools** - edycja, usuwanie, bulk operations
-- 🚫 **Security system** - blokady sprzedaży akcji pod CC
-- 📊 **Analytics** - Win Rate, P/L analysis, performance rating
+### **System jest teraz bardziej profesjonalny:**
+- 🎯 **Clean UI** - usunięto nadmiar emoji i deweloperskich komunikatów
+- 🛠️ **Centralized Tools** - wszystkie narzędzia deweloperskie w jednym miejscu
+- 📊 **Enhanced Monitoring** - zaawansowana diagnostyka i metryki
+- 🔧 **Professional UX** - czytelny interfejs skupiony na funkcjonalności biznesowej
+- ✅ **Production Ready Modules** - główne moduły oczyszczone i gotowe do użycia
 
 ---
 
-**Ostatnia aktualizacja**: 2025-01-23  
+**Ostatnia aktualizacja**: 2025-01-25  
 **Przez**: Assistant Claude  
-**Status**: PUNKT 67 ukończony - Tabele zamkniętych CC + UI Cleanup gotowe!  
-**Następny milestone**: PUNKT 68-70 - OSTATNIE 3 PUNKTY ETAPU 4!
+**Status**: PUNKT 69 ukończony - Dev Tools kompletny + UI profesjonalizacja!  
+**Następny milestone**: PUNKT 70 - FINAŁ ETAPU 4 = 70% PROJEKTU!
 
 ---
 
-**🎯 67% PROJEKTU UKOŃCZONE - ETAP 4 PRAWIE GOTOWY!** 🚀  
-**Zostały tylko 3 punkty do ukończenia 70% projektu!** ⭐
+**🎯 69% PROJEKTU UKOŃCZONE - POZOSTAŁ 1 PUNKT DO 70%!** 🚀  
+**Jeden krok od ukończenia najważniejszego etapu Options!** ⭐

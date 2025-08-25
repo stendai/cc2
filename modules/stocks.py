@@ -1,10 +1,3 @@
-"""
-Moduł Stocks - Zarządzanie akcjami i LOT-ami
-ETAP 3 - Punkty 31-38: UKOŃCZONE
-PUNKT 46 DODANY: Tabela LOT-ów
-NAPRAWIONO: Przywrócenie oryginalnej struktury
-"""
-
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
@@ -303,11 +296,7 @@ def show_stocks():
     st.markdown("*Zakupy LOT-ów, sprzedaże FIFO, P/L tracking*")
     
     # Informacja o statusie ETAPU 3
-    st.success("🚀 **PUNKTY 31-38 UKOŃCZONE** - LOT-y + sprzedaże FIFO ✅")
-    st.info("📊 **PUNKT 46 UKOŃCZONY** - Tabela LOT-ów ✅")
-    st.info("📈 **PUNKT 47 UKOŃCZONY** - Historia sprzedaży z kursami NBP ✅")
-    st.info("🔍 **PUNKT 48 UKOŃCZONY** - Filtry i sortowanie ✅")
-    st.success("📤 **PUNKT 49 UKOŃCZONY** - Eksport do CSV! ✅")
+    st.info("Zarządzanie portfelem akcji z systemem FIFO")
     
     # ZAKŁADKI POZOSTAJĄ IDENTYCZNE
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 LOT-y", "💰 Sprzedaże", "📊 Podsumowanie", "📋 Tabela LOT-ów", "🛏️ Historia US"])
@@ -335,7 +324,6 @@ def show_lots_tab():
     
     with col1:
         st.markdown("### ➕ Dodaj nowy LOT")
-        st.success("**Punkty 32-35**: Formularz + zapis + cashflow ✅")
         
         # FORMULARZ
         with st.form("add_lot_form"):
@@ -453,7 +441,19 @@ def show_lots_tab():
                 st.write(f"**Akcje w portfelu:** {lots_stats['open_shares']} szt.")
                 
                 # 🚀 PLACEHOLDER dla przyszłości (ETAP 4: Options)
-                st.info("💡 **ETAP 4**: Tutaj będzie podział na objęte CC vs wolne do sprzedaży")
+# PUNKT 69 - SZYBKA POPRAWKA: usuń zaślepkę ETAPU 4
+
+# W modules/stocks.py, w funkcji show_purchase_tab() znajdź linię:
+
+                # I USUŃ ją całkowicie lub ZAMIEŃ na:
+                st.info("Dostępne akcje do dalszych operacji")
+
+                # ALTERNATYWNIE, pokaż użyteczną informację zamiast zaślepki:
+                if lots_stats['total_shares'] > lots_stats['open_shares']:
+                    reserved_shares = lots_stats['total_shares'] - lots_stats['open_shares']
+                    st.info(f"📊 **Portfel:** {lots_stats['open_shares']} wolne, {reserved_shares} pod CC")
+                else:
+                    st.info(f"📊 **Portfel:** {lots_stats['open_shares']} akcji dostępnych")
             else:
                 st.info("💡 Brak LOT-ów w bazie - dodaj pierwszy zakup")
         except Exception as e:
@@ -462,8 +462,6 @@ def show_lots_tab():
 def show_sales_tab():
     """Tab sprzedaży akcji (FIFO) - ORYGINALNY NAPRAWIONY"""
     st.subheader("💰 Sprzedaże akcji (FIFO)")
-    
-    st.success("**Punkty 36-38**: Logika FIFO + formularz sprzedaży ✅")
     
     # 🎉 POKAŻ OSTATNIĄ SPRZEDAŻ jeśli była
     if 'last_sale_success' in st.session_state:
@@ -510,7 +508,6 @@ def show_sales_tab():
     
     with col2:
         st.markdown("### 💸 Formularz sprzedaży")
-        st.success("**Punkt 37-38**: Formularz z kursem NBP D-1 ✅")
         
         # 🔧 NAPRAWIONY FORMULARZ SPRZEDAŻY
         with st.form("sell_stocks_form"):
@@ -1610,67 +1607,6 @@ def show_summary_tab():
         except Exception as e:
             st.warning(f"⚠️ Nie można pobrać cashflows: {e}")
         
-        # 🎯 SEKCJA 5: STATUS KOMPLETNOŚCI MODUŁU
-        st.markdown("---")
-        st.markdown("### ✅ Status kompletności modułu Stocks")
-        
-        # Test wszystkich funkcji
-        test_results = {
-            "LOT-y w bazie": len(lots) > 0,
-            "Sprzedaże FIFO": len(trades) > 0,
-            "Cashflows stocks": True,  # Sprawdziliśmy wyżej
-            "Tabele działają": True,   # Jeśli doszliśmy tutaj
-            "Filtry działają": True,   # Zakładamy że działają
-            "Eksport CSV": True        # Punkt 49 ukończony
-        }
-        
-        col_test1, col_test2 = st.columns(2)
-        
-        with col_test1:
-            st.markdown("**🧪 Test funkcjonalności:**")
-            for test_name, result in test_results.items():
-                icon = "✅" if result else "❌"
-                st.write(f"{icon} {test_name}")
-        
-        with col_test2:
-            # Podsumowanie etapu
-            completed_points = [31, 32, 33, 34, 35, 36, 37, 38, 46, 47, 48, 49, 50]
-            
-            st.markdown("**🎯 ETAP 3 - Postęp:**")
-            st.write(f"✅ Ukończone punkty: {len(completed_points)}")
-            st.write(f"📊 Zakres: 31-50 (Stocks)")
-            st.write(f"🚀 Status: **KOMPLETNY**")
-            
-            progress_value = len(completed_points) / 20  # 20 punktów w etapie 3
-            st.progress(progress_value)
-            st.caption(f"Postęp: {len(completed_points)}/20 punktów")
-        
-        # 🎯 SEKCJA 6: PRZYGOTOWANIE DO ETAPU 4
-        st.markdown("---")
-        st.markdown("### 🚀 Gotowość do ETAPU 4")
-        
-        st.info("""
-        **🎯 ETAP 4 - OPTIONS (Punkty 51-70):**
-        - Covered Calls z rezerwacją akcji FIFO
-        - Buyback i expiry z kalkulacjami P/L
-        - Rolowanie opcji (buyback + nowa sprzedaż) 
-        - Blokady sprzedaży akcji pod otwartymi CC
-        - Alerty expiry ≤ 3 dni
-        """)
-        
-        if total_shares > 0:
-            st.success(f"✅ **Gotowe do Options**: {total_shares} akcji dostępnych do pokrycia CC")
-        else:
-            st.warning("⚠️ Dodaj LOT-y akcji przed rozpoczęciem ETAPU 4")
-        
-        # PUNKT 51.1: PODSUMOWANIE OSIĄGNIĘĆ
-        show_etap3_summary()
-        
-        # Status punktu 50 (już istniejący)
-        st.markdown("---")
-        st.success("🎉 **PUNKT 50 UKOŃCZONY**: Dashboard w zakładce Podsumowanie!")
-        st.success("🏁 **ETAP 3 STOCKS UKOŃCZONY** - Wszystkie punkty 31-50 gotowe!")
-        st.info("🚀 **NASTĘPNY ETAP**: Punkty 51-70 - Moduł Options (Covered Calls)")
         
         # ===============================================
 # DODAJ DO show_summary_tab() PO show_etap3_summary()
@@ -1681,8 +1617,6 @@ def show_summary_tab():
         # PUNKT 51.2: FINALNE TESTY
         if st.button("🧪 Uruchom finalne testy systemu", type="primary", use_container_width=True):
             run_comprehensive_tests()
-        
-        st.info("💡 Kliknij przycisk powyżej aby uruchomić kompleksowe testy przed finalizacją ETAPU 3") 
         
     except Exception as e:
         st.error(f"❌ Błąd dashboardu: {e}")
@@ -1951,9 +1885,6 @@ def show_lots_table():
         # PUNKT 49A: EKSPORT CSV
         add_lots_csv_export(filtered_lots)
         
-        # Status punktu - ZAKTUALIZOWANY
-        st.markdown("---")
-        st.success("✅ **PUNKT 46+48+49 UKOŃCZONY**: Tabela LOT-ów z filtrami + eksport CSV!")
     
     except Exception as e:
         st.error(f"❌ Błąd pobierania LOT-ów: {e}")
@@ -2382,10 +2313,7 @@ def show_sales_table():
         # PUNKT 49B: EKSPORT CSV
         add_sales_csv_export(filtered_trades)
         
-        # Status punktu - ZAKTUALIZOWANY
-        st.markdown("---")
-        st.success("✅ **PUNKT 47+48+49 UKOŃCZONY**: Historia sprzedaży z filtrami + eksport CSV!")
-    
+
     except Exception as e:
         st.error(f"❌ Błąd pobierania historii sprzedaży: {e}")
         if conn:
@@ -2914,12 +2842,7 @@ def show_etap3_summary():
     if all_ready:
         st.success("🚀 **GOTOWY DO ETAPU 4!** Wszystkie systemy działają prawidłowo.")
     else:
-        st.warning("⚠️ Niektóre systemy wymagają uwagi przed ETAPEM 4.")
-    
-    # Podsumowanie punktu 51.1
-    st.markdown("---")
-    st.success("✅ **PUNKT 51.1 UKOŃCZONY**: Podsumowanie osiągnięć ETAPU 3!")
-    st.info("🔄 **NASTĘPNY**: Punkt 51.2 - Finalne testy wszystkich funkcji")
+        st.warning("⚠️ Niektóre systemy wymagają uwagi przed ETAPEM 4.")    
     
 # ===============================================
 # PUNKT 51.2: FINALNE TESTY WSZYSTKICH FUNKCJI

@@ -49,7 +49,7 @@ def main():
     with st.sidebar:
         st.header("🧭 Nawigacja")
         
-        # Menu items z kluczami
+        # Menu items z kluczami - PUNKT 68: DODANO Dev_Tools
         menu_items = {
             'Dashboard': '🏠 Dashboard',
             'Stocks': '📊 Stocks ✅',
@@ -59,7 +59,8 @@ def main():
             'Taxes': '📋 Taxes', 
             'Stats': '📈 Stats',
             'Charts': '📊 Charts',
-            'NBP_Test': '🏦 NBP Test ✅'
+            'NBP_Test': '🏦 NBP Test ✅',
+            'Dev_Tools': '🛠️ Dev Tools 🆕'  # PUNKT 68: NOWA OPCJA
         }
         
         st.markdown("### Moduły:")
@@ -67,17 +68,17 @@ def main():
             if st.button(label, use_container_width=True):
                 st.session_state.current_page = key
         
-        # Status projektu w sidebar
+        # Status projektu w sidebar - PUNKT 68: AKTUALIZACJA
         st.markdown("---")
         st.markdown("### 📊 Status projektu")
-        st.markdown("**PUNKT 61 UKOŃCZONY** ✅")
-        st.markdown("Punkty 1-61 (61/100)")
-        st.markdown("*Options: Blokady CC działają!*")
+        st.markdown("**PUNKT 68 UKOŃCZONY** ✅")  # ZMIENIONO z 61 na 68
+        st.markdown("Punkty 1-68 (68/100)")  # ZMIENIONO z 61 na 68
+        st.markdown("*Dev Tools: Moduł deweloperski gotowy!*")  # ZMIENIONO opis
 
-        # Progress bar
-        progress = 61 / 100  # 61 punktów z 100
+        # Progress bar - PUNKT 68: AKTUALIZACJA
+        progress = 68 / 100  # ZMIENIONO z 61 na 68
         st.progress(progress)
-        st.caption("61% projektu ukończone")
+        st.caption("68% projektu ukończone")  # ZMIENIONO z 61% na 68%
     
     # Główna zawartość - routing do modułów
     if st.session_state.current_page == 'Dashboard':
@@ -116,6 +117,14 @@ def main():
         show_placeholder('Stats', '📈', 'Statystyki i analizy - ETAP 7')
     elif st.session_state.current_page == 'Charts':
         show_placeholder('Charts', '📊', 'Wykresy i wizualizacje - ETAP 7')
+    # PUNKT 68: DODANO ROUTING DO DEV TOOLS
+    elif st.session_state.current_page == 'Dev_Tools':
+        try:
+            from modules.dev_tools import show_dev_tools
+            show_dev_tools()
+        except ImportError:
+            st.error("❌ Nie można zaimportować modułu dev_tools")
+            st.info("💡 Upewnij się, że plik modules/dev_tools.py istnieje")
 
 def show_nbp_test():
     """Strona testowania NBP API - pełna funkcjonalność"""
@@ -139,10 +148,10 @@ def show_dashboard():
     # Status portfela
     st.markdown("### 📊 Status portfela")
     
-    # Progress bar
-    progress = 68 / 100  # PUNKT 68 ukończony
+    # Progress bar - PUNKT 68: AKTUALIZACJA
+    progress = 68 / 100  # ZMIENIONO z 61 na 68
     st.progress(progress)
-    st.caption("68% funkcjonalności dostępne")
+    st.caption("68% funkcjonalności dostępne")  # ZMIENIONO opis
     
     # Statystyki systemu - wersja uproszczona
     st.markdown("### 📈 Statystyki")
@@ -190,13 +199,14 @@ def show_dashboard():
         ✅ Cashflows  
         ✅ Stocks (FIFO)  
         ✅ Options (CC)  
+        ✅ Dev Tools  
         ⏳ Dividends, Taxes, Charts
         """)
     
-    # Status ETAPU 4
+    # Status ETAPU 4 - PUNKT 68: AKTUALIZACJA
     st.markdown("---")
     st.info("🎯 **ETAP 4 w finalizacji** - zostały tylko punkty 69-70 do ukończenia 70% projektu!")
-    # CLEANUP: Usunięto sekcję "PUNKT 61" i inne deweloperskie expanders
+    st.success("✅ **PUNKT 68 UKOŃCZONY** - Moduł Dev Tools dodany do systemu!")
 
 def show_placeholder(module_name, icon, description):
     """Placeholder dla modułów, które będą implementowane w kolejnych etapach"""
