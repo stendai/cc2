@@ -52,15 +52,15 @@ def main():
         # Menu items z kluczami - PUNKT 68: DODANO Dev_Tools
         menu_items = {
             'Dashboard': '🏠 Dashboard',
-            'Stocks': '📊 Stocks ✅',
+            'Stocks': '📊 Stocks',
             'Options': '🎯 Options', 
             'Dividends': '💰 Dividends',
-            'Cashflows': '💸 Cashflows ✅',
+            'Cashflows': '💸 Cashflows',
             'Taxes': '📋 Taxes', 
             'Stats': '📈 Stats',
             'Charts': '📊 Charts',
-            'NBP_Test': '🏦 NBP Test ✅',
-            'Dev_Tools': '🛠️ Dev Tools 🆕'  # PUNKT 68: NOWA OPCJA
+            'NBP_Test': '🏦 NBP Test',
+            'Dev_Tools': '🛠️ Dev Tools'
         }
         
         st.markdown("### Moduły:")

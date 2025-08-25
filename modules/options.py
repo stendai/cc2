@@ -289,7 +289,7 @@ def show_cc_sell_preview(form_data):
             return
     
     # Sprawdź pokrycie FIFO
-    coverage = db.check_cc_coverage(ticker, contracts)
+    coverage = db.check_cc_coverage_with_chronology(ticker, contracts, sell_date)
     
     if not coverage.get('can_cover'):
         st.error(f"❌ **BRAK POKRYCIA dla {contracts} kontraktów {ticker}**")
@@ -462,9 +462,8 @@ def show_cc_sell_preview(form_data):
     st.success("✅ **PUNKTY 53-54 UKOŃCZONE**: Formularz sprzedaży CC z zapisem!")
 
 def show_buyback_expiry_tab():
-    """Tab buyback i expiry - PUNKT 56: Z funkcjami buyback/expiry"""
+    """Tab buyback i expiry - Z PEŁNYM PODGLĄDEM JAK SPRZEDAŻ"""
     st.subheader("💰 Buyback & Expiry")
-    st.success("✅ **PUNKT 56 UKOŃCZONY** - Funkcje buyback i expiry CC")
     
     # Pobierz otwarte CC
     try:
@@ -477,9 +476,10 @@ def show_buyback_expiry_tab():
         
         col1, col2 = st.columns([1, 1])
         
+        # ===== BUYBACK SEKCJA =====
         with col1:
             st.markdown("### 💰 Buyback CC")
-            st.info("Odkup opcji przed expiry z kalkulacją P/L PLN")
+            st.info("Odkup opcji przed expiry z podglądem P/L PLN")
             
             # Wybór CC do buyback
             cc_options = [f"CC #{cc['id']} - {cc['ticker']} ${cc['strike_usd']:.2f} exp {cc['expiry_date']}" 
@@ -497,19 +497,20 @@ def show_buyback_expiry_tab():
                 selected_cc = next((cc for cc in open_cc_list if cc['id'] == selected_cc_id), None)
                 
                 if selected_cc:
-                    # Formularz buyback
+                    # FORMULARZ BUYBACK - IDENTYCZNY FLOW JAK SPRZEDAŻ
                     with st.form("buyback_form"):
                         st.write(f"**Odkup CC #{selected_cc_id}:**")
                         st.write(f"📊 {selected_cc['ticker']} - {selected_cc['contracts']} kontraktów")
                         st.write(f"💰 Sprzedano @ ${selected_cc['premium_sell_usd']:.2f}/akcja")
                         
+                        # CENA I DATA
                         col_buy1, col_buy2 = st.columns(2)
                         
                         with col_buy1:
                             buyback_price = st.number_input(
                                 "Cena buyback USD (za akcję):",
                                 min_value=0.01,
-                                value=max(0.01, selected_cc['premium_sell_usd'] * 0.5),  # 50% premium jako default
+                                value=max(0.01, selected_cc['premium_sell_usd'] * 0.5),
                                 step=0.01,
                                 format="%.2f"
                             )
@@ -520,154 +521,296 @@ def show_buyback_expiry_tab():
                                 value=date.today()
                             )
                         
-                        # Podgląd kalkulacji
-                        contracts = selected_cc['contracts']
-                        premium_received = selected_cc['premium_sell_usd'] * contracts * 100
-                        buyback_cost = buyback_price * contracts * 100
-                        pl_usd_preview = premium_received - buyback_cost
+                        # PROWIZJE - IDENTYCZNIE JAK W SPRZEDAŻY
+                        st.markdown("**💰 Prowizje brokerskie:**")
+                        col_fee1, col_fee2 = st.columns(2)
                         
-                        st.write(f"**Podgląd P/L USD:**")
-                        st.write(f"Premium otrzymana: ${premium_received:.2f}")
-                        st.write(f"Koszt buyback: ${buyback_cost:.2f}")
-                        if pl_usd_preview >= 0:
-                            st.success(f"Zysk USD: +${pl_usd_preview:.2f}")
-                        else:
-                            st.error(f"Strata USD: ${pl_usd_preview:.2f}")
+                        with col_fee1:
+                            buyback_broker_fee = st.number_input(
+                                "Prowizja brokera USD:",
+                                min_value=0.00,
+                                value=1.00,
+                                step=0.01,
+                                format="%.2f",
+                                help="Prowizja IBKR za odkup opcji"
+                            )
                         
-                        submit_buyback = st.form_submit_button("💰 WYKONAJ BUYBACK", use_container_width=True)
+                        with col_fee2:
+                            buyback_reg_fee = st.number_input(
+                                "Opłaty regulacyjne USD:",
+                                min_value=0.00,
+                                value=0.15,
+                                step=0.01,
+                                format="%.2f",
+                                help="SEC, FINRA fees dla buyback"
+                            )
+                        
+                        # PRZYCISK PODGLĄDU (nie wykonania!)
+                        check_buyback = st.form_submit_button("🔍 Sprawdź podgląd buyback", use_container_width=True)
                     
-                    # Wykonanie buyback
-                    if submit_buyback:
-                        with st.spinner("Wykonywanie buyback..."):
-                            result = db.buyback_covered_call(selected_cc_id, buyback_price, buyback_date)
-                            
-                            if result['success']:
-                                st.success(f"✅ **{result['message']}**")
-                                
-                                # Pokaż szczegóły
-                                pl_pln = result['pl_pln']
-                                if pl_pln >= 0:
-                                    st.success(f"🟢 **Zysk PLN**: +{pl_pln:.2f} zł")
-                                else:
-                                    st.error(f"🔴 **Strata PLN**: {pl_pln:.2f} zł")
-                                
-                                st.info(f"💰 Premium otrzymana: {result['premium_received_pln']:.2f} zł")
-                                st.info(f"💸 Koszt buyback: {result['buyback_cost_pln']:.2f} zł")
-                                st.info(f"🔓 Zwolniono: {result['shares_released']} akcji {selected_cc['ticker']}")
-                                st.info(f"💱 Kurs buyback: {result['fx_close']:.4f} ({result['fx_close_date']})")
-                                
-                                st.balloons()
-                                
-                                # WYCZYŚĆ SESSION STATE z zakładki sprzedaż
-                                if 'show_cc_preview' in st.session_state:
-                                    del st.session_state.show_cc_preview
-                                if 'cc_form_data' in st.session_state:
-                                    del st.session_state.cc_form_data  
-                                if 'cc_to_save' in st.session_state:
-                                    del st.session_state.cc_to_save
+                    # ZAPISZ DANE FORMULARZA DO SESSION STATE
+                    if check_buyback:
+                        st.session_state.buyback_form_data = {
+                            'cc_id': selected_cc_id,
+                            'cc_data': selected_cc,
+                            'buyback_price': buyback_price,
+                            'buyback_date': buyback_date,
+                            'broker_fee': buyback_broker_fee,
+                            'reg_fee': buyback_reg_fee
+                        }
+                        st.session_state.show_buyback_preview = True
 
-                                # Krótkie opóźnienie i odświeżenie
-                                import time
-                                time.sleep(1)
-                                st.rerun()
-                            else:
-                                st.error(f"❌ **Błąd buyback**: {result['message']}")
-        
+        # ===== EXPIRY SEKCJA (bez zmian) =====
         with col2:
-            st.markdown("### 📅 Mark as Expired")
-            st.info("Oznacz CC jako wygasłe (pełny zysk z premium)")
+            st.markdown("### ⏰ Expire CC")
+            st.info("Oznacz opcje jako wygasłe (maksymalny zysk)")
             
-            # Wybór CC do expiry
-            cc_expiry_options = [f"CC #{cc['id']} - {cc['ticker']} ${cc['strike_usd']:.2f} exp {cc['expiry_date']}" 
-                               for cc in open_cc_list]
-            
-            if cc_expiry_options:
-                selected_expiry_option = st.selectbox(
-                    "Wybierz CC do expiry:",
-                    options=cc_expiry_options,
-                    key="expiry_select"
+            if cc_options:
+                selected_expire_option = st.selectbox(
+                    "Wybierz CC do expire:",
+                    options=cc_options,
+                    key="expire_select"
                 )
                 
-                # Wyciągnij CC ID
-                selected_expiry_id = int(selected_expiry_option.split('#')[1].split(' ')[0])
-                selected_expiry_cc = next((cc for cc in open_cc_list if cc['id'] == selected_expiry_id), None)
+                selected_expire_id = int(selected_expire_option.split('#')[1].split(' ')[0])
+                selected_expire_cc = next((cc for cc in open_cc_list if cc['id'] == selected_expire_id), None)
                 
-                if selected_expiry_cc:
-                    # Formularz expiry
-                    with st.form("expiry_form"):
-                        st.write(f"**Expiry CC #{selected_expiry_id}:**")
-                        st.write(f"📊 {selected_expiry_cc['ticker']} - {selected_expiry_cc['contracts']} kontraktów")
-                        st.write(f"💰 Premium: ${selected_expiry_cc['premium_sell_usd']:.2f}/akcja")
-                        st.write(f"📅 Expiry: {selected_expiry_cc['expiry_date']}")
+                if selected_expire_cc:
+                    with st.form("expire_form"):
+                        st.write(f"**Expire CC #{selected_expire_id}:**")
+                        st.write(f"📊 {selected_expire_cc['ticker']} - {selected_expire_cc['contracts']} kontraktów")
+                        st.write(f"💰 Premium: ${selected_expire_cc['premium_sell_usd']:.2f}/akcja")
+                        st.write(f"📅 **Expiry date**: {selected_expire_cc['expiry_date']}")
                         
-                        # Podgląd zysku (pełna premium)
-                        full_premium_pln = selected_expiry_cc['premium_sell_pln']
-                        st.success(f"🟢 **Zysk przy expiry**: +{full_premium_pln:.2f} zł")
-                        st.write("💡 Przy expiry - opcja wygasa bezwartościowo, zatrzymujesz pełną premium")
+                        use_custom_date = st.checkbox(
+                            "Użyj innej daty expiry:",
+                            help="Domyślnie używana jest data expiry z bazy"
+                        )
                         
-                        submit_expiry = st.form_submit_button("📅 MARK AS EXPIRED", use_container_width=True)
+                        if use_custom_date:
+                            from datetime import datetime
+                            default_expiry = datetime.strptime(selected_expire_cc['expiry_date'], '%Y-%m-%d').date()
+                            custom_expiry = st.date_input(
+                                "Niestandardowa data expiry:",
+                                value=default_expiry,
+                                key="custom_expiry_date"
+                            )
+                        else:
+                            custom_expiry = None
+                        
+                        st.markdown("---")
+                        total_premium_pln = selected_expire_cc.get('premium_sell_pln', 0)
+                        st.success(f"**💚 Zysk PLN: +{total_premium_pln:.2f} zł**")
+                        st.info("ℹ️ Przy expiry nie ma kosztów - pełna premium to zysk")
+                        
+                        submit_expire = st.form_submit_button("⏰ OZNACZ JAKO EXPIRED", use_container_width=True)
                     
-                    # Wykonanie expiry
-                    if submit_expiry:
+                    if submit_expire:
                         with st.spinner("Oznaczanie jako expired..."):
-                            result = db.expire_covered_call(selected_expiry_id)
+                            expiry_date_to_use = custom_expiry if use_custom_date else None
+                            
+                            result = db.expire_covered_call(
+                                cc_id=selected_expire_id,
+                                expiry_date=expiry_date_to_use
+                            )
                             
                             if result['success']:
                                 st.success(f"✅ **{result['message']}**")
-                                st.success(f"🟢 **Zysk PLN**: +{result['pl_pln']:.2f} zł")
-                                st.info(f"🔓 Zwolniono: {result['shares_released']} akcji {selected_expiry_cc['ticker']}")
-                                st.info(f"📅 Data expiry: {result['expiry_date']}")
-                                
+                                pl_pln = result.get('pl_pln', 0)
+                                st.success(f"🎉 Zysk PLN: +{pl_pln:.2f} zł")
+                                st.info(f"🔓 Zwolniono: {result.get('shares_released', 0)} akcji")
                                 st.balloons()
-                                
-                                # WYCZYŚĆ SESSION STATE z zakładki sprzedaż
-                                if 'show_cc_preview' in st.session_state:
-                                    del st.session_state.show_cc_preview
-                                if 'cc_form_data' in st.session_state:
-                                    del st.session_state.cc_form_data
-                                if 'cc_to_save' in st.session_state:  
-                                    del st.session_state.cc_to_save
-
-                                # Krótkie opóźnienie i odświeżenie
-                                import time
-                                time.sleep(1)
                                 st.rerun()
                             else:
-                                st.error(f"❌ **Błąd expiry**: {result['message']}")
-        
-        # Test funkcji PUNKT 56
-        st.markdown("---")
-        if st.button("🧪 Test funkcji buyback/expiry (PUNKT 56)"):
-            test_results = db.test_buyback_expiry_operations()
-            
-            col_test1, col_test2, col_test3 = st.columns(3)
-            
-            with col_test1:
-                if test_results.get('buyback_function_test'):
-                    st.success("✅ Funkcja buyback")
-                else:
-                    st.error("❌ Funkcja buyback")
-            
-            with col_test2:
-                if test_results.get('expiry_function_test'):
-                    st.success("✅ Funkcja expiry")
-                else:
-                    st.error("❌ Funkcja expiry")
-            
-            with col_test3:
-                if test_results.get('cc_list_test'):
-                    st.success("✅ Lista CC")
-                else:
-                    st.error("❌ Lista CC")
+                                st.error(f"❌ {result['message']}")
     
     except Exception as e:
-        st.error(f"❌ Błąd w buyback/expiry: {e}")
+        st.error(f"Błąd buyback/expiry: {e}")
     
-    # Status punktu
-    st.markdown("---")
-    st.success("✅ **PUNKT 56 UKOŃCZONY** - Funkcje buyback i expiry z kalkulacją P/L PLN!")
-    st.info("🔄 **NASTĘPNY KROK**: PUNKT 57-58 - Finalizacja buyback/expiry")
+    # ===== PODGLĄD BUYBACK - IDENTYCZNY JAK W SPRZEDAŻY CC =====
+    if 'show_buyback_preview' in st.session_state and st.session_state.show_buyback_preview:
+        if 'buyback_form_data' in st.session_state:
+            st.markdown("---")
+            show_buyback_cc_preview(st.session_state.buyback_form_data)
 
+def show_buyback_cc_preview(form_data):
+    """PODGLĄD BUYBACK - IDENTYCZNY JAK show_cc_sell_preview()"""
+    st.markdown("### 🎯 Podgląd buyback Covered Call")
+    
+    cc_id = form_data['cc_id']
+    cc_data = form_data['cc_data']
+    buyback_price = form_data['buyback_price']
+    buyback_date = form_data['buyback_date']
+    broker_fee = form_data['broker_fee']
+    reg_fee = form_data['reg_fee']
+    
+    # Podstawowe dane CC
+    ticker = cc_data['ticker']
+    contracts = cc_data['contracts']
+    premium_sell_usd = cc_data['premium_sell_usd']
+    premium_sell_pln = cc_data.get('premium_sell_pln', 0)
+    fx_open = cc_data.get('fx_open', 4.0)
+    
+    st.success(f"✅ **BUYBACK CC #{cc_id} - {ticker}**")
+    
+    # Podstawowe kalkulacje USD
+    premium_received_usd = premium_sell_usd * contracts * 100
+    buyback_cost_usd = buyback_price * contracts * 100
+    total_fees_usd = broker_fee + reg_fee
+    total_buyback_cost_usd = buyback_cost_usd + total_fees_usd
+    
+    # 🎯 POBIERZ KURS NBP D-1 - IDENTYCZNIE JAK W SPRZEDAŻY
+    try:
+        nbp_result = nbp_api_client.get_usd_rate_for_date(buyback_date)
+        if isinstance(nbp_result, dict) and 'rate' in nbp_result:
+            fx_close = nbp_result['rate']
+            fx_close_date = nbp_result.get('date', buyback_date)
+        else:
+            fx_close = float(nbp_result)
+            fx_close_date = buyback_date
+        
+        fx_success = True
+        
+    except Exception as e:
+        st.error(f"❌ Błąd pobierania kursu NBP: {e}")
+        fx_close = 4.0  # Fallback
+        fx_close_date = buyback_date
+        fx_success = False
+    
+    # P/L kalkulacje z różnymi kursami
+    pl_usd = premium_received_usd - total_buyback_cost_usd
+    buyback_cost_pln = total_buyback_cost_usd * fx_close
+    pl_pln = premium_sell_pln - buyback_cost_pln
+    
+    # WYŚWIETL SZCZEGÓŁY - IDENTYCZNIE JAK W SPRZEDAŻY
+    col_preview1, col_preview2, col_preview3 = st.columns(3)
+    
+    with col_preview1:
+        st.markdown("**📊 Szczegóły CC:**")
+        st.write(f"🏷️ **Ticker**: {ticker}")
+        st.write(f"🎯 **Kontrakty**: {contracts}")
+        st.write(f"📦 **Akcje**: {contracts * 100}")
+        st.write(f"💰 **Strike**: ${cc_data.get('strike_usd', 0):.2f}")
+        st.write(f"📅 **Data sprzedaży**: {cc_data.get('open_date', 'N/A')}")
+        st.write(f"📅 **Data buyback**: {buyback_date}")
+    
+    with col_preview2:
+        st.markdown("**💰 Kalkulacje USD:**")
+        st.write(f"💵 **Premium otrzymana**: ${premium_received_usd:.2f}")
+        st.write(f"💸 **Koszt buyback**: ${buyback_cost_usd:.2f}")
+        st.write(f"🏛️ **Broker fee**: ${broker_fee:.2f}")
+        st.write(f"📋 **Reg fee**: ${reg_fee:.2f}")
+        st.write(f"💎 **Łączny koszt**: ${total_buyback_cost_usd:.2f}")
+        
+        if pl_usd >= 0:
+            st.success(f"**🟢 P/L USD: +${pl_usd:.2f}**")
+        else:
+            st.error(f"**🔴 P/L USD: ${pl_usd:.2f}**")
+    
+    with col_preview3:
+        st.markdown("**🇵🇱 Przeliczenie PLN:**")
+        st.write(f"💱 **Kurs sprzedaży**: {fx_open:.4f}")
+        st.write(f"💰 **Premium PLN**: {premium_sell_pln:.2f} zł")
+        st.markdown("---")
+        if fx_success:
+            st.success(f"💱 **Kurs NBP buyback** ({fx_close_date}): {fx_close:.4f}")
+        else:
+            st.warning(f"⚠️ **Kurs fallback**: {fx_close:.4f}")
+        
+        st.write(f"💸 **Koszt buyback PLN**: {buyback_cost_pln:.2f} zł")
+        
+        if pl_pln >= 0:
+            st.success(f"**🟢 P/L PLN: +{pl_pln:.2f} zł**")
+        else:
+            st.error(f"**🔴 P/L PLN: {pl_pln:.2f} zł**")
+    
+    # COMPLIANCE INFO - IDENTYCZNIE JAK W SPRZEDAŻY
+    st.markdown("---")
+    st.info(f"""
+    ✅ **US TAX COMPLIANCE**: Zastosowano kursy NBP zgodnie z art. 25 ust. 1 ustawy o PIT.
+    
+    📅 **Sprzedaż CC**: {cc_data.get('open_date', 'N/A')} → Kurs NBP D-1: {fx_open:.4f}
+    📅 **Buyback CC**: {buyback_date} → Kurs NBP D-1: {fx_close:.4f}
+    
+    💰 **Rozliczenie**: Premium PLN ({fx_open:.4f}) - Koszt PLN ({fx_close:.4f}) = P/L PLN
+    """)
+    
+    # Przygotuj dane do zapisu
+    buyback_data = {
+        'cc_id': cc_id,
+        'buyback_price_usd': buyback_price,
+        'buyback_date': buyback_date,
+        'broker_fee_usd': broker_fee,
+        'reg_fee_usd': reg_fee,
+        'fx_close': fx_close,
+        'fx_close_date': fx_close_date,
+        'pl_pln': pl_pln,
+        'buyback_cost_pln': buyback_cost_pln
+    }
+    
+    st.session_state.buyback_to_save = buyback_data
+    
+    # PRZYCISKI AKCJI - IDENTYCZNIE JAK W SPRZEDAŻY
+    st.markdown("---")
+    col_btn1, col_btn2, col_btn3 = st.columns(3)
+    
+    with col_btn1:
+        if st.button("💰 WYKONAJ BUYBACK", type="primary", key="execute_buyback"):
+            with st.spinner("Wykonywanie buyback..."):
+                result = db.buyback_covered_call_with_fees(
+                    cc_id=cc_id,
+                    buyback_price_usd=buyback_price,
+                    buyback_date=buyback_date,
+                    broker_fee_usd=broker_fee,
+                    reg_fee_usd=reg_fee
+                )
+                
+                if result['success']:
+                    st.success(f"✅ **{result['message']}**")
+                    
+                    final_pl_pln = result.get('pl_pln', 0)
+                    if final_pl_pln >= 0:
+                        st.success(f"🎉 Zysk PLN: +{final_pl_pln:.2f} zł")
+                    else:
+                        st.error(f"📉 Strata PLN: {final_pl_pln:.2f} zł")
+                    
+                    st.info(f"💰 Cashflow: -{result.get('buyback_cost_pln', 0):.2f} PLN")
+                    st.info(f"📅 Kurs NBP: {result.get('fx_close', 0):.4f}")
+                    st.info(f"🔓 Zwolniono: {result.get('shares_released', 0)} akcji")
+                    
+                    st.balloons()
+                    
+                    # Wyczyść session state
+                    if 'show_buyback_preview' in st.session_state:
+                        del st.session_state.show_buyback_preview
+                    if 'buyback_form_data' in st.session_state:
+                        del st.session_state.buyback_form_data
+                    if 'buyback_to_save' in st.session_state:
+                        del st.session_state.buyback_to_save
+                    
+                    st.rerun()
+                else:
+                    st.error(f"❌ {result['message']}")
+    
+    with col_btn2:
+        if st.button("➕ Nowy buyback", key="new_buyback_btn"):
+            if 'show_buyback_preview' in st.session_state:
+                del st.session_state.show_buyback_preview
+            if 'buyback_form_data' in st.session_state:
+                del st.session_state.buyback_form_data
+            if 'buyback_to_save' in st.session_state:
+                del st.session_state.buyback_to_save
+            st.rerun()
+    
+    with col_btn3:
+        if st.button("❌ Anuluj", key="cancel_buyback_preview"):
+            if 'show_buyback_preview' in st.session_state:
+                del st.session_state.show_buyback_preview
+            if 'buyback_form_data' in st.session_state:
+                del st.session_state.buyback_form_data
+            if 'buyback_to_save' in st.session_state:
+                del st.session_state.buyback_to_save
+            st.rerun()
 
 def get_portfolio_cc_summary():
     """
@@ -739,12 +882,11 @@ def get_portfolio_cc_summary():
 
 def show_open_cc_tab():
     """
-    PUNKT 66: Zaawansowana tabela otwartych CC z rozbiciami FIFO
+    PUNKT 66: Zaawansowana tabela otwartych CC + NAPRAWKA: Przycisk usuń/edytuj
     """
     st.subheader("📊 Otwarte pozycje CC")
-    st.success("✅ **PUNKT 66 UKOŃCZONY** - Zaawansowane tabele z pokryciem FIFO")
     
-    # Podsumowanie portfela
+    # Podsumowanie portfela (bez zmian)
     portfolio_summary = db.get_portfolio_cc_summary()
     
     if portfolio_summary['open_cc_count'] == 0:
@@ -752,56 +894,24 @@ def show_open_cc_tab():
         st.markdown("*Sprzedaj pierwszą opcję w zakładce 'Sprzedaż CC'*")
         return
     
-    # METRICS OVERVIEW
+    # METRICS OVERVIEW (bez zmian)
     st.markdown("### 📈 Podsumowanie portfela CC")
     
     col_metric1, col_metric2, col_metric3, col_metric4 = st.columns(4)
     
     with col_metric1:
-        st.metric(
-            "🎯 Otwarte CC",
-            f"{portfolio_summary['open_cc_count']}",
-            help="Liczba otwartych pozycji"
-        )
+        st.metric("🎯 Otwarte CC", f"{portfolio_summary['open_cc_count']}")
     
     with col_metric2:
-        st.metric(
-            "📦 Kontrakty",
-            f"{portfolio_summary['total_open_contracts']}",
-            help="Suma wszystkich kontraktów"
-        )
+        st.metric("📦 Kontrakty", f"{portfolio_summary['total_open_contracts']}")
     
     with col_metric3:
-        st.metric(
-            "🔒 Akcje zarezerwowane",
-            f"{portfolio_summary['total_shares_reserved']}",
-            help="Akcje pod pokryciem CC"
-        )
+        st.metric("🔒 Akcje zarezerwowane", f"{portfolio_summary['total_shares_reserved']}")
     
     with col_metric4:
-        st.metric(
-            "💰 Premium PLN",
-            f"{portfolio_summary['total_open_premium_pln']:,.2f} zł",
-            help="Łączna otrzymana premium"
-        )
+        st.metric("💰 Premium PLN", f"{portfolio_summary['total_open_premium_pln']:,.2f} zł")
     
-    # BREAKDOWN PER TICKER
-    if portfolio_summary['ticker_stats']:
-        st.markdown("### 📊 Rozkład per ticker")
-        
-        ticker_data = []
-        for stat in portfolio_summary['ticker_stats']:
-            ticker_data.append({
-                'Ticker': stat['ticker'],
-                'CC Count': stat['cc_count'],
-                'Kontrakty': stat['total_contracts'],
-                'Akcje': stat['shares_reserved'],
-                'Premium PLN': f"{stat['total_premium_pln']:,.2f} zł"
-            })
-        
-        st.dataframe(ticker_data, use_container_width=True)
-    
-    # SZCZEGÓŁOWE TABELE CC
+    # SZCZEGÓŁOWE TABELE CC + PRZYCISK USUŃ/EDYTUJ
     st.markdown("### 🔍 Szczegółowe pozycje CC")
     
     coverage_details = db.get_cc_coverage_details()
@@ -810,7 +920,6 @@ def show_open_cc_tab():
         st.error("❌ Błąd pobierania szczegółów pokrycia")
         return
     
-    # Sprawdź alerty expiry
     from datetime import date
     today = date.today()
     
@@ -831,7 +940,7 @@ def show_open_cc_tab():
             alert_color = "🟢"
             alert_text = f"{days_to_expiry}d left"
         
-        # Expander per CC
+        # Expander per CC Z PRZYCISKAMI AKCJI
         with st.expander(
             f"{alert_color} CC #{cc_detail['cc_id']} - {cc_detail['ticker']} @ ${cc_detail['strike_usd']} ({alert_text})",
             expanded=(days_to_expiry <= 3)
@@ -859,7 +968,6 @@ def show_open_cc_tab():
                 st.write(f"📊 **Premium yield**: {cc_detail['premium_yield_pct']:.2f}%")
                 st.write(f"📈 **Annualized yield**: {cc_detail['annualized_yield_pct']:.1f}%")
                 
-                # Yield quality indicator
                 if cc_detail['annualized_yield_pct'] >= 20:
                     st.success("🚀 Excellent yield")
                 elif cc_detail['annualized_yield_pct'] >= 12:
@@ -869,8 +977,152 @@ def show_open_cc_tab():
                 else:
                     st.error("❌ Low yield")
             
-            # FIFO COVERAGE TABLE
-            if cc_detail['lot_allocations']:
+            # ✅ DODAJ SEKCJĘ AKCJI (USUŃ/EDYTUJ)
+            st.markdown("---")
+            st.markdown("**🔧 Akcje:**")
+            
+            col_action1, col_action2, col_action3, col_action4 = st.columns(4)
+            
+            # PRZYCISK USUŃ
+            with col_action1:
+                delete_key = f"delete_cc_{cc_detail['cc_id']}"
+                confirm_key = f"confirm_delete_{cc_detail['cc_id']}"
+                
+                if st.button(f"🗑️ Usuń", key=delete_key, help="Usuń CC + cashflow + zwolnij akcje"):
+                    st.session_state[confirm_key] = True
+                
+                # Potwierdzenie usunięcia
+                if st.session_state.get(confirm_key, False):
+                    if st.button(f"✅ POTWIERDŹ", key=f"confirm_{cc_detail['cc_id']}", type="primary"):
+                        with st.spinner("Usuwanie CC..."):
+                            result = db.delete_covered_call(cc_detail['cc_id'], confirm_delete=True)
+                            
+                            if result['success']:
+                                st.success(f"✅ {result['message']}")
+                                details = result['details']
+                                st.info(f"🔓 Zwolniono {details['shares_released']} akcji {details['ticker']}")
+                                if details.get('cashflows_deleted'):
+                                    st.info(f"💸 Usunięto powiązane cashflow")
+                                
+                                # Wyczyść potwierdzenie i odśwież
+                                del st.session_state[confirm_key]
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {result['message']}")
+            
+            # PRZYCISK EDYTUJ DATĘ
+            with col_action2:
+                edit_key = f"edit_cc_{cc_detail['cc_id']}"
+                
+                if st.button(f"✏️ Edytuj", key=edit_key, help="Edytuj parametry CC"):
+                    st.session_state[f"show_edit_{cc_detail['cc_id']}"] = True
+            
+            # QUICK BUYBACK
+            with col_action3:
+                if st.button(f"💰 Buyback", key=f"quick_buyback_{cc_detail['cc_id']}", help="Przejdź do buyback"):
+                    st.info("💡 Przejdź do zakładki 'Buyback & Expiry'")
+            
+            # QUICK EXPIRE
+            with col_action4:
+                if st.button(f"⏰ Expire", key=f"quick_expire_{cc_detail['cc_id']}", help="Oznacz jako expired"):
+                    with st.spinner("Expire CC..."):
+                        result = db.expire_covered_call(cc_detail['cc_id'])
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {result['message']}")
+            
+            # ✅ FORMULARZ EDYCJI (JEŚLI WŁĄCZONY)
+            if st.session_state.get(f"show_edit_{cc_detail['cc_id']}", False):
+                st.markdown("---")
+                st.markdown("**✏️ Edycja parametrów CC:**")
+                
+                with st.form(f"edit_form_{cc_detail['cc_id']}"):
+                    col_edit1, col_edit2, col_edit3 = st.columns(3)
+                    
+                    with col_edit1:
+                        new_open_date = st.date_input(
+                            "Nowa data otwarcia:",
+                            value=datetime.strptime(cc_detail['open_date'], '%Y-%m-%d').date(),
+                            key=f"new_open_date_{cc_detail['cc_id']}"
+                        )
+                    
+                    with col_edit2:
+                        new_premium = st.number_input(
+                            "Nowa premium USD:",
+                            min_value=0.01,
+                            value=float(cc_detail['premium_sell_usd']),
+                            step=0.01,
+                            format="%.2f",
+                            key=f"new_premium_{cc_detail['cc_id']}"
+                        )
+                    
+                    with col_edit3:
+                        new_expiry = st.date_input(
+                            "Nowa data expiry:",
+                            value=datetime.strptime(cc_detail['expiry_date'], '%Y-%m-%d').date(),
+                            key=f"new_expiry_{cc_detail['cc_id']}"
+                        )
+                    
+                    # Pokazuj nowy kurs NBP dla nowej daty
+                    if new_open_date != datetime.strptime(cc_detail['open_date'], '%Y-%m-%d').date():
+                        try:
+                            import nbp_api_client
+                            new_fx_result = nbp_api_client.get_usd_rate_for_date(new_open_date)
+                            if isinstance(new_fx_result, dict):
+                                new_fx_rate = new_fx_result['rate']
+                            else:
+                                new_fx_rate = float(new_fx_result)
+                            
+                            st.info(f"💱 Nowy kurs NBP ({new_open_date}): {new_fx_rate:.4f}")
+                            new_premium_pln = new_premium * cc_detail['contracts'] * 100 * new_fx_rate
+                            st.info(f"💰 Nowa premium PLN: {new_premium_pln:.2f} zł")
+                            
+                        except Exception as e:
+                            st.warning(f"⚠️ Błąd pobierania nowego kursu NBP: {e}")
+                    
+                    col_save, col_cancel = st.columns(2)
+                    
+                    with col_save:
+                        if st.form_submit_button("💾 Zapisz zmiany", type="primary"):
+                            # Wywołaj funkcję edycji z nowymi parametrami
+                            changes = {}
+                            
+                            if new_open_date != datetime.strptime(cc_detail['open_date'], '%Y-%m-%d').date():
+                                changes['open_date'] = new_open_date.strftime('%Y-%m-%d')
+                            
+                            if new_premium != cc_detail['premium_sell_usd']:
+                                changes['premium_sell_usd'] = new_premium
+                            
+                            if new_expiry != datetime.strptime(cc_detail['expiry_date'], '%Y-%m-%d').date():
+                                changes['expiry_date'] = new_expiry.strftime('%Y-%m-%d')
+                            
+                            if changes:
+                                with st.spinner("Zapisywanie zmian..."):
+                                    result = db.update_covered_call_with_recalc(cc_detail['cc_id'], **changes)
+                                    
+                                    if result['success']:
+                                        st.success(f"✅ {result['message']}")
+                                        if result.get('changes'):
+                                            for change in result['changes']:
+                                                st.info(f"📝 {change}")
+                                        
+                                        # Wyczyść edycję i odśwież
+                                        del st.session_state[f"show_edit_{cc_detail['cc_id']}"]
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ {result['message']}")
+                            else:
+                                st.warning("⚠️ Brak zmian do zapisania")
+                    
+                    with col_cancel:
+                        if st.form_submit_button("❌ Anuluj"):
+                            del st.session_state[f"show_edit_{cc_detail['cc_id']}"]
+                            st.rerun()
+            
+            # FIFO COVERAGE TABLE (bez zmian)
+            if cc_detail.get('lot_allocations'):
                 st.markdown("**🔄 Pokrycie FIFO (LOT-y):**")
                 
                 fifo_data = []
@@ -886,35 +1138,7 @@ def show_open_cc_tab():
                     })
                 
                 st.dataframe(fifo_data, use_container_width=True)
-                
-                # Podsumowanie pokrycia
-                total_covered = sum([alloc['shares_allocated'] for alloc in cc_detail['lot_allocations']])
-                if total_covered == cc_detail['shares_needed']:
-                    st.success(f"✅ Pełne pokrycie: {total_covered}/{cc_detail['shares_needed']} akcji")
-                else:
-                    st.warning(f"⚠️ Niepełne pokrycie: {total_covered}/{cc_detail['shares_needed']} akcji")
-            else:
-                st.error("❌ Brak informacji o pokryciu FIFO!")
-    
-    # Quick Actions
-    st.markdown("---")
-    st.markdown("### ⚡ Szybkie akcje")
-    
-    col_action1, col_action2, col_action3 = st.columns(3)
-    
-    with col_action1:
-        if st.button("🔄 Odśwież dane", key="refresh_open_cc"):
-            st.rerun()
-    
-    with col_action2:
-        if st.button("💸 Buyback CC", key="quick_buyback"):
-            st.info("💡 Przejdź do zakładki 'Buyback & Expiry'")
-    
-    with col_action3:
-        if st.button("📈 Sprzedaj kolejne CC", key="quick_sell_more"):
-            st.info("💡 Przejdź do zakładki 'Sprzedaż CC'")
 
-# NAPRAWA w modules/options.py - funkcja show_cc_history_tab()
 
 def show_cc_history_tab():
     """
@@ -973,7 +1197,41 @@ def show_cc_history_tab():
                 f"{total_closed}",
                 help=f"Expired: {expired_count}, Bought back: {buyback_count}"
             )
+ 
+        # ✅ CLEANUP SECTION - NOWA FUNKCJA!
+        st.markdown("---")
+        st.markdown("### 🧹 Narzędzia cleanup")
         
+        col_cleanup1, col_cleanup2, col_cleanup3 = st.columns(3)
+        
+        with col_cleanup1:
+            if st.button("🧹 Usuń orphaned cashflow", key="cleanup_cashflow", help="Usuwa cashflow bez powiązań z CC"):
+                with st.spinner("Szukam orphaned cashflow..."):
+                    result = db.cleanup_orphaned_cashflow()
+                    if result['success']:
+                        st.success(f"✅ {result['message']}")
+                        if result['deleted_count'] > 0:
+                            st.info(f"🗑️ Usunięto {result['deleted_count']} orphaned cashflow")
+                            for desc in result['deleted_descriptions']:
+                                st.write(f"   • {desc}")
+                    else:
+                        st.error(f"❌ {result['message']}")
+        
+        with col_cleanup2:
+            if st.button("📊 Sprawdź integralność", key="check_integrity", help="Sprawdza spójność CC vs cashflow"):
+                integrity = db.check_cc_cashflow_integrity()
+                
+                if integrity['issues']:
+                    st.warning(f"⚠️ Znaleziono {len(integrity['issues'])} problemów:")
+                    for issue in integrity['issues']:
+                        st.write(f"   • {issue}")
+                else:
+                    st.success("✅ Brak problemów z integralnością")
+        
+        with col_cleanup3:
+            if st.button("🔄 Odśwież dane", key="refresh_history"):
+                st.rerun()
+ 
         # Performance per ticker
         ticker_performance = performance.get('ticker_performance', [])
         if ticker_performance:
@@ -1179,6 +1437,7 @@ def show_cc_history_tab():
                 st.write(f"📊 **Status**: {cc.get('outcome_text', cc.get('status', 'N/A'))}")
                 st.write(f"🎯 **Dni trzymania**: {cc.get('days_held', 0)}")
                 st.write(f"📈 **Yield p.a.**: {annualized_yield:.1f}%")
+                
     
     # Export CSV
     if st.button("📥 Eksport CSV", key="export_history_csv"):

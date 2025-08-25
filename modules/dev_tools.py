@@ -572,5 +572,83 @@ def show_dev_tools():
     st.progress(0.97)  # 68/70 = 97% ETAPU 4
     st.caption("🎯 **ETAP 4**: 68/70 punktów ukończone - zostały tylko 2 punkty!")
 
+def show_cleanup_tools():
+    """Narzędzia cleanup w Dev Tools"""
+    st.markdown("### 🧹 Cleanup Tools")
+    
+    col_clean1, col_clean2 = st.columns(2)
+    
+    with col_clean1:
+        st.markdown("#### 🗑️ Bulk Delete CC")
+        
+        # Pobierz wszystkie CC
+        all_cc = db.get_deletable_cc_list()
+        
+        if all_cc:
+            # Filtry
+            status_filter = st.selectbox(
+                "Status do usunięcia:",
+                ["Wszystkie", "Expired", "Bought back", "Open (OSTROŻNIE!)"],
+                key="bulk_delete_status"
+            )
+            
+            ticker_filter = st.selectbox(
+                "Ticker:",
+                ["Wszystkie"] + list(set([cc['ticker'] for cc in all_cc])),
+                key="bulk_delete_ticker"
+            )
+            
+            # Filtracja
+            filtered = []
+            for cc in all_cc:
+                if status_filter != "Wszystkie":
+                    if status_filter == "Expired" and cc['status'] != 'expired':
+                        continue
+                    elif status_filter == "Bought back" and cc['status'] != 'bought_back':
+                        continue
+                    elif status_filter == "Open (OSTROŻNIE!)" and cc['status'] != 'open':
+                        continue
+                
+                if ticker_filter != "Wszystkie" and cc['ticker'] != ticker_filter:
+                    continue
+                
+                filtered.append(cc)
+            
+            st.write(f"**Znaleziono:** {len(filtered)} CC do usunięcia")
+            
+            if filtered and st.button("🗑️ BULK DELETE", key="execute_bulk_delete", type="primary"):
+                if st.checkbox("✅ Potwierdzam masowe usunięcie", key="confirm_bulk"):
+                    with st.spinner(f"Usuwanie {len(filtered)} CC..."):
+                        cc_ids = [cc['id'] for cc in filtered]
+                        result = db.bulk_delete_covered_calls(cc_ids, confirm_bulk=True)
+                        
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.info(f"🗑️ Usunięto: {result['deleted']}/{result['total_requested']}")
+                        else:
+                            st.error(f"❌ {result['message']}")
+        else:
+            st.info("Brak CC do usunięcia")
+    
+    with col_clean2:
+        st.markdown("#### 🧹 Orphaned Cashflow")
+        
+        if st.button("🔍 Znajdź orphaned", key="find_orphaned"):
+            integrity = db.check_cc_cashflow_integrity()
+            
+            orphaned_count = len([i for i in integrity['issues'] if 'nie ma CC' in i])
+            
+            if orphaned_count > 0:
+                st.warning(f"⚠️ Znaleziono {orphaned_count} orphaned cashflow")
+                
+                if st.button("🗑️ Usuń orphaned", key="delete_orphaned", type="primary"):
+                    result = db.cleanup_orphaned_cashflow()
+                    if result['success']:
+                        st.success(f"✅ {result['message']}")
+                    else:
+                        st.error(f"❌ {result['message']}")
+            else:
+                st.success("✅ Brak orphaned cashflow")
+
 if __name__ == "__main__":
     show_dev_tools()
