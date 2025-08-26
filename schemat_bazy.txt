@@ -1,0 +1,135 @@
+📋 SCHEMAT BAZY DANYCH:
+========================================
+
+🗂️ TABELA: fx_rates
+   id: INTEGER (PK)
+   date: DATE NOT NULL
+   code: TEXT NOT NULL
+   rate: DECIMAL(10,6) NOT NULL
+   source: TEXT
+   created_at: TIMESTAMP
+
+🗂️ TABELA: sqlite_sequence
+   name:
+   seq:
+
+🗂️ TABELA: cashflows
+   id: INTEGER (PK)
+   type: TEXT NOT NULL
+   amount_usd: DECIMAL(15,2) NOT NULL
+   date: DATE NOT NULL
+   fx_rate: DECIMAL(10,6) NOT NULL
+   amount_pln: DECIMAL(15,2) NOT NULL
+   description: TEXT
+   ref_table: TEXT
+   ref_id: INTEGER
+   created_at: TIMESTAMP
+   updated_at: TIMESTAMP
+
+🗂️ TABELA: lots
+   id: INTEGER (PK)
+   ticker: TEXT NOT NULL
+   quantity_total: INTEGER NOT NULL
+   quantity_open: INTEGER NOT NULL
+   buy_price_usd: DECIMAL(10,4) NOT NULL
+   broker_fee_usd: DECIMAL(10,2)
+   reg_fee_usd: DECIMAL(10,2)
+   buy_date: DATE NOT NULL
+   fx_rate: DECIMAL(10,6) NOT NULL
+   cost_pln: DECIMAL(15,2) NOT NULL
+   created_at: TIMESTAMP
+   updated_at: TIMESTAMP
+
+🗂️ TABELA: stock_trades
+   id: INTEGER (PK)
+   ticker: TEXT NOT NULL
+   quantity: INTEGER NOT NULL
+   sell_price_usd: DECIMAL(10,4) NOT NULL
+   sell_date: DATE NOT NULL
+   fx_rate: DECIMAL(10,6) NOT NULL
+   broker_fee_usd: DECIMAL(10,2)
+   reg_fee_usd: DECIMAL(10,2)
+   proceeds_pln: DECIMAL(15,2) NOT NULL
+   cost_pln: DECIMAL(15,2) NOT NULL
+   pl_pln: DECIMAL(15,2) NOT NULL
+   created_at: TIMESTAMP
+
+🗂️ TABELA: stock_trade_splits
+   id: INTEGER (PK)
+   trade_id: INTEGER NOT NULL
+   lot_id: INTEGER NOT NULL
+   qty_from_lot: INTEGER NOT NULL
+   cost_part_pln: DECIMAL(15,2) NOT NULL
+   commission_part_usd: DECIMAL(10,2) NOT NULL
+   commission_part_pln: DECIMAL(15,2) NOT NULL
+   created_at: TIMESTAMP
+
+🗂️ TABELA: options_cc
+   id: INTEGER (PK)
+   ticker: TEXT NOT NULL
+   lot_linked_id: INTEGER
+   contracts: INTEGER NOT NULL
+   strike_usd: DECIMAL(10,4) NOT NULL
+   premium_sell_usd: DECIMAL(10,4) NOT NULL
+   premium_buyback_usd: DECIMAL(10,4)
+   open_date: DATE NOT NULL
+   close_date: DATE
+   expiry_date: DATE NOT NULL
+   status: TEXT NOT NULL
+   fx_open: DECIMAL(10,6) NOT NULL
+   fx_close: DECIMAL(10,6)
+   premium_sell_pln: DECIMAL(15,2) NOT NULL
+   premium_buyback_pln: DECIMAL(15,2)
+   pl_pln: DECIMAL(15,2)
+   created_at: TIMESTAMP
+   updated_at: TIMESTAMP
+   broker_fee_usd: DECIMAL(10,2)
+   reg_fee_usd: DECIMAL(10,2)
+   broker_fee_sell_usd: DECIMAL(10,2)
+   reg_fee_sell_usd: DECIMAL(10,2)
+   broker_fee_buyback_usd: DECIMAL(10,2)
+   reg_fee_buyback_usd: DECIMAL(10,2)
+   total_fees_sell_pln: DECIMAL(15,2)
+   total_fees_buyback_pln: DECIMAL(15,2)
+   net_premium_pln: DECIMAL(15,2)
+   pl_usd: DECIMAL(15,2)
+   parent_cc_id: INTEGER
+
+🗂️ TABELA: dividends
+   id: INTEGER (PK)
+   ticker: TEXT NOT NULL
+   gross_usd: DECIMAL(10,4) NOT NULL
+   date_paid: DATE NOT NULL
+   fx_rate: DECIMAL(10,6) NOT NULL
+   gross_pln: DECIMAL(15,2) NOT NULL
+   wht_15_pln: DECIMAL(15,2) NOT NULL
+   tax_4_pln: DECIMAL(15,2) NOT NULL
+   net_pln: DECIMAL(15,2) NOT NULL
+   created_at: TIMESTAMP
+
+🗂️ TABELA: market_prices
+   id: INTEGER (PK)
+   ticker: TEXT NOT NULL
+   date: DATE NOT NULL
+   price_usd: DECIMAL(10,4) NOT NULL
+   source: TEXT
+   created_at: TIMESTAMP
+
+🗂️ TABELA: app_info
+   id: INTEGER (PK)
+   version: TEXT
+   created_at: TIMESTAMP
+   last_updated: TIMESTAMP
+
+🗂️ TABELA: options_cc_reservations
+   id: INTEGER (PK)
+   cc_id: INTEGER NOT NULL
+   lot_id: INTEGER NOT NULL
+   qty_reserved: INTEGER NOT NULL
+
+🗂️ TABELA: cc_lot_mappings
+   id: INTEGER (PK)
+   cc_id: INTEGER NOT NULL
+   lot_id: INTEGER NOT NULL
+   shares_reserved: INTEGER NOT NULL
+   created_at: TIMESTAMP

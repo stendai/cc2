@@ -3755,12 +3755,32 @@ def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd,
             'message': f'Błąd częściowego buyback: {str(e)}'
         }
 
-def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_fee_usd=0.0, reg_fee_usd=0.0):
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+🔧 KLUCZOWA POPRAWKA: Napraw zwalnianie akcji po buyback CC
+Dodaj do db.py lub uruchom jako patch
+"""
+
+def fix_buyback_stock_release():
     """
-    🚀 UPROSZCZONA: Buyback CC - działa z istniejącą strukturą bazy
+    GŁÓWNA POPRAWKA funkcji buyback - ZAWSZE zwalnia akcje po odkupu
     
-    NAPRAWKA: Używa tylko quantity_open w lots, bez lot_reservations
+    Problem: Po buyback CC, akcje pozostają zablokowane (quantity_open nie zwiększa się)
+    Rozwiązanie: Napraw logikę zwalniania w simple_buyback_covered_call()
     """
+    
+    # WERSJA NAPRAWIONA dla db.py
+    return """
+def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_fee_usd=0.0, reg_fee_usd=0.0):
+    \"\"\"
+    🔧 NAPRAWIONA: Buyback CC - ZAWSZE zwalnia akcje po odkupie
+    
+    KLUCZOWE ZMIANY:
+    1. Po buyback ZAWSZE zwiększ quantity_open w lots  
+    2. Sprawdź czy istnieją mapowania i je usuń
+    3. Fallback: zwolnij akcje FIFO jeśli brak mapowań
+    \"\"\"
     try:
         conn = get_connection()
         if not conn:
@@ -3769,12 +3789,12 @@ def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_f
         cursor = conn.cursor()
         
         # 1. POBIERZ DANE CC
-        cursor.execute("""
+        cursor.execute(\"\"\"
             SELECT id, ticker, contracts, premium_sell_usd, open_date, expiry_date,
                    status, fx_open, premium_sell_pln
             FROM options_cc 
             WHERE id = ? AND status = 'open'
-        """, (cc_id,))
+        \"\"\", (cc_id,))
         
         cc_record = cursor.fetchone()
         if not cc_record:
@@ -3783,13 +3803,13 @@ def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_f
         
         cc_id, ticker, contracts, premium_sell_usd, open_date, expiry_date, status, fx_open, premium_sell_pln = cc_record
         
-        # 2. POBIERZ KURS NBP
+        # 2. POBIERZ KURS NBP na buyback_date
         if hasattr(buyback_date, 'strftime'):
             buyback_date_str = buyback_date.strftime('%Y-%m-%d')
         else:
             buyback_date_str = str(buyback_date)
         
-        from nbp_api_client import get_usd_rate_for_date
+        from utils.nbp_api_client import get_usd_rate_for_date
         
         try:
             nbp_result = get_usd_rate_for_date(buyback_date_str)
@@ -3800,20 +3820,22 @@ def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_f
                 fx_close = float(nbp_result)
                 fx_close_date = buyback_date_str
         except:
-            fx_close = 4.0
+            fx_close = 4.0  # Fallback
             fx_close_date = buyback_date_str
         
-        # 3. KALKULACJE
-        shares_to_release = contracts * 100
-        buyback_cost_usd = shares_to_release * buyback_price_usd
+        # 3. WYLICZENIA FINANSOWE
         total_fees_usd = broker_fee_usd + reg_fee_usd
-        total_buyback_cost_usd = buyback_cost_usd + total_fees_usd
-        buyback_cost_pln = total_buyback_cost_usd * fx_close
+        net_buyback_price_usd = buyback_price_usd + (total_fees_usd / (contracts * 100))
+        total_buyback_cost_usd = (buyback_price_usd * contracts * 100) + total_fees_usd
+        buyback_cost_pln = round(total_buyback_cost_usd * fx_close, 2)
         
-        pl_pln = premium_sell_pln - buyback_cost_pln
+        # P/L calculation
+        premium_buyback_usd = buyback_price_usd * contracts * 100
+        premium_buyback_pln = round(premium_buyback_usd * fx_close, 2)
+        pl_pln = round(premium_sell_pln - premium_buyback_pln - (total_fees_usd * fx_close), 2)
         
-        # 4. ZAKTUALIZUJ CC NA BOUGHT_BACK
-        cursor.execute("""
+        # 4. ZAKTUALIZUJ CC NA 'bought_back'
+        cursor.execute(\"\"\"
             UPDATE options_cc 
             SET status = 'bought_back', 
                 close_date = ?, 
@@ -3821,53 +3843,89 @@ def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_f
                 fx_close = ?, 
                 premium_buyback_pln = ?
             WHERE id = ?
-        """, (buyback_date_str, buyback_price_usd, fx_close, buyback_cost_pln, cc_id))
+        \"\"\", (buyback_date_str, premium_buyback_usd, fx_close, premium_buyback_pln, cc_id))
         
-        # 5. ZWOLNIJ AKCJE - ZWIĘKSZ quantity_open FIFO
-        cursor.execute("""
-            SELECT id, quantity_total, quantity_open, buy_date
-            FROM lots 
-            WHERE ticker = ? AND quantity_total > 0
-            ORDER BY buy_date ASC, id ASC
-        """, (ticker.upper(),))
+        # 5. 🔧 KLUCZOWA NAPRAWKA: ZWOLNIJ AKCJE
+        shares_to_release = contracts * 100
         
-        lots_for_ticker = cursor.fetchall()
-        remaining_to_release = shares_to_release
+        # METODA A: Sprawdź mapowania (jeśli istnieją)
+        cursor.execute(\"\"\"
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='cc_lot_mappings'
+        \"\"\")
+        
+        has_mappings_table = cursor.fetchone() is not None
         lots_updated = 0
         
-        for lot_id, qty_total, qty_open, buy_date in lots_for_ticker:
-            if remaining_to_release <= 0:
-                break
+        if has_mappings_table:
+            # USUŃ MAPOWANIA I ZWOLNIJ DOKŁADNIE TE LOT-y
+            cursor.execute(\"\"\"
+                SELECT lot_id, shares_reserved 
+                FROM cc_lot_mappings 
+                WHERE cc_id = ?
+                ORDER BY lot_id ASC
+            \"\"\", (cc_id,))
             
-            # Ile z tego LOT-a może być zarezerwowane pod CC
-            potentially_reserved = qty_total - qty_open
+            mappings = cursor.fetchall()
             
-            if potentially_reserved > 0:
-                # Zwolnij część lub całość
-                qty_to_release = min(potentially_reserved, remaining_to_release)
-                
-                cursor.execute("""
+            for lot_id, shares_reserved in mappings:
+                # Zwróć akcje do quantity_open
+                cursor.execute(\"\"\"
                     UPDATE lots 
                     SET quantity_open = quantity_open + ?
                     WHERE id = ?
-                """, (qty_to_release, lot_id))
-                
-                remaining_to_release -= qty_to_release
+                \"\"\", (shares_reserved, lot_id))
                 lots_updated += 1
+            
+            # Usuń mapowania
+            cursor.execute(\"\"\"
+                DELETE FROM cc_lot_mappings WHERE cc_id = ?
+            \"\"\", (cc_id,))
+            
+        else:
+            # METODA B: FALLBACK - zwolnij akcje FIFO (bez mapowań)
+            cursor.execute(\"\"\"
+                SELECT id, quantity_total, quantity_open 
+                FROM lots 
+                WHERE ticker = ? AND quantity_total > quantity_open
+                ORDER BY buy_date ASC, id ASC
+            \"\"\", (ticker.upper(),))
+            
+            blocked_lots = cursor.fetchall()
+            remaining_to_release = shares_to_release
+            
+            for lot_id, qty_total, qty_open in blocked_lots:
+                if remaining_to_release <= 0:
+                    break
+                
+                # Ile akcji z tego LOT-a jest zablokowanych
+                blocked_qty = qty_total - qty_open
+                if blocked_qty > 0:
+                    # Zwolnij część lub całość
+                    qty_to_release = min(blocked_qty, remaining_to_release)
+                    
+                    cursor.execute(\"\"\"
+                        UPDATE lots 
+                        SET quantity_open = quantity_open + ?
+                        WHERE id = ?
+                    \"\"\", (qty_to_release, lot_id))
+                    
+                    remaining_to_release -= qty_to_release
+                    lots_updated += 1
         
-        # 6. UTWÓRZ CASHFLOW
-        cashflow_description = f"Buyback CC #{cc_id} ({contracts} kontraktów)"
+        # 6. UTWÓRZ CASHFLOW (wydatek buyback)
+        cashflow_description = f\"Buyback {ticker} CC #{cc_id} ({contracts} kontraktów)\"
         if total_fees_usd > 0:
-            cashflow_description += f" + prowizje ${total_fees_usd:.2f}"
+            cashflow_description += f\" + prowizje ${total_fees_usd:.2f}\"
         
-        cursor.execute("""
+        cursor.execute(\"\"\"
             INSERT INTO cashflows (
                 type, amount_usd, date, fx_rate, amount_pln, 
                 description, ref_table, ref_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
+        \"\"\", (
             'option_buyback',
-            -total_buyback_cost_usd,
+            -total_buyback_cost_usd,  # Ujemna kwota (wydatek)
             buyback_date_str,
             fx_close,
             -buyback_cost_pln,
@@ -3881,17 +3939,16 @@ def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_f
         
         return {
             'success': True,
-            'message': f'CC #{cc_id} odkupione pomyślnie!',
+            'message': f'Odkupiono CC #{cc_id}! Zwolniono {shares_to_release} akcji {ticker}',
             'contracts_bought_back': contracts,
-            'contracts_remaining': 0,  # Zawsze pełny buyback w tej wersji
             'pl_pln': pl_pln,
             'premium_received_pln': premium_sell_pln,
             'buyback_cost_pln': buyback_cost_pln,
             'total_fees_usd': total_fees_usd,
             'fx_close': fx_close,
-            'fx_close_date': fx_close_date,
             'shares_released': shares_to_release,
-            'lots_updated': lots_updated
+            'lots_updated': lots_updated,
+            'mapping_method': 'mappings' if has_mappings_table else 'fifo_fallback'
         }
         
     except Exception as e:
@@ -3904,6 +3961,167 @@ def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_f
             'message': f'Błąd buyback: {str(e)}'
         }
 
+# DODATKOWA FUNKCJA: Automatyczna naprawa wszystkich bought_back CC
+def fix_all_bought_back_cc_blocks():
+    \"\"\"
+    🔧 EMERGENCY FIX: Zwolnij akcje ze wszystkich bought_back CC
+    
+    Uruchom jeśli masz wiele CC z tym problemem
+    \"\"\"
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # 1. ZNAJDŹ WSZYSTKIE bought_back CC
+        cursor.execute(\"\"\"
+            SELECT id, ticker, contracts, status
+            FROM options_cc 
+            WHERE status = 'bought_back'
+        \"\"\")
+        
+        bought_back_ccs = cursor.fetchall()
+        fixed_count = 0
+        
+        # 2. SPRAWDŹ KTÓRE MAJĄ ZABLOKOWANE AKCJE
+        for cc_id, ticker, contracts, status in bought_back_ccs:
+            shares_expected = contracts * 100
+            
+            # Sprawdź mapowania
+            cursor.execute(\"\"\"
+                SELECT COALESCE(SUM(shares_reserved), 0)
+                FROM cc_lot_mappings 
+                WHERE cc_id = ?
+            \"\"\", (cc_id,))
+            
+            mapped_shares = cursor.fetchone()[0] or 0
+            
+            if mapped_shares > 0:
+                # NAPRAW: usuń mapowania i zwolnij akcje
+                cursor.execute(\"\"\"
+                    SELECT lot_id, shares_reserved 
+                    FROM cc_lot_mappings 
+                    WHERE cc_id = ?
+                \"\"\", (cc_id,))
+                
+                mappings = cursor.fetchall()
+                
+                for lot_id, shares_reserved in mappings:
+                    cursor.execute(\"\"\"
+                        UPDATE lots 
+                        SET quantity_open = quantity_open + ?
+                        WHERE id = ?
+                    \"\"\", (shares_reserved, lot_id))
+                
+                cursor.execute(\"\"\"
+                    DELETE FROM cc_lot_mappings WHERE cc_id = ?
+                \"\"\", (cc_id,))
+                
+                fixed_count += 1
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'message': f'Naprawiono {fixed_count} bought_back CC - akcje zwolnione!',
+            'fixed_count': fixed_count
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        return {'success': False, 'message': f'Błąd mass fix: {str(e)}'}
+
+# WALIDACJA: Sprawdź czy system działa prawidłowo
+def validate_cc_stock_consistency():
+    \"\"\"
+    🔍 SPRAWDZA: Czy wszystkie CC są spójne z blokadami akcji
+    \"\"\"
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'issues': ['Brak połączenia z bazą']}
+        
+        cursor = conn.cursor()
+        issues = []
+        
+        # 1. Bought_back CC z mapowaniami (błąd!)
+        cursor.execute(\"\"\"
+            SELECT cc.id, cc.ticker, cc.contracts, COUNT(m.lot_id) as mapped_lots
+            FROM options_cc cc
+            LEFT JOIN cc_lot_mappings m ON cc.id = m.cc_id
+            WHERE cc.status = 'bought_back'
+            GROUP BY cc.id
+            HAVING COUNT(m.lot_id) > 0
+        \"\"\")
+        
+        problematic_ccs = cursor.fetchall()
+        for cc_id, ticker, contracts, mapped_lots in problematic_ccs:
+            issues.append(f\"CC #{cc_id} ({ticker}) bought_back ale ma {mapped_lots} mapowań!\")
+        
+        # 2. Open CC bez mapowań (możliwy problem)
+        cursor.execute(\"\"\"
+            SELECT cc.id, cc.ticker, cc.contracts
+            FROM options_cc cc
+            LEFT JOIN cc_lot_mappings m ON cc.id = m.cc_id
+            WHERE cc.status = 'open'
+            AND m.cc_id IS NULL
+        \"\"\")
+        
+        unmapped_open_ccs = cursor.fetchall()
+        for cc_id, ticker, contracts in unmapped_open_ccs:
+            issues.append(f\"CC #{cc_id} ({ticker}) open ale brak mapowań!\")
+        
+        conn.close()
+        
+        return {
+            'issues': issues,
+            'problematic_ccs_count': len(problematic_ccs),
+            'unmapped_open_ccs_count': len(unmapped_open_ccs)
+        }
+        
+    except Exception as e:
+        return {'issues': [f'Błąd walidacji: {str(e)}']}
+"""
+
+def apply_buyback_fix():
+    """Zastosuj poprawkę w kodzie aplikacji"""
+    
+    fix_instructions = f'''
+    📋 INSTRUKCJA APLIKACJI POPRAWKI:
+    
+    1. 🔧 ZASTĄP w db.py funkcję simple_buyback_covered_call() 
+       powyższą naprawioną wersją
+       
+    2. 🔧 DODAJ funkcje fix_all_bought_back_cc_blocks() i validate_cc_stock_consistency()
+       na końcu db.py
+       
+    3. ✅ URUCHOM w modułu Options przycisk emergency fix:
+       if st.button("🚨 Napraw wszystkie bought_back CC"):
+           result = db.fix_all_bought_back_cc_blocks()
+           st.success(result['message'])
+           
+    4. 🧪 DODAJ walidację w Dev Tools:
+       validation = db.validate_cc_stock_consistency()
+       if validation['issues']:
+           st.error("Znalezione problemy:")
+           for issue in validation['issues']:
+               st.write(f"- {issue}")
+    '''
+    
+    return fix_instructions
+
+if __name__ == "__main__":
+    print("🔧 POPRAWKA BUYBACK - AUTOMATYCZNE ZWALNIANIE AKCJI")
+    print("=" * 60)
+    
+    print(fix_buyback_stock_release())
+    print("\n" + "=" * 60)
+    print(apply_buyback_fix())
 # ============================================================================
 # ROZWIĄZANIE 1: Dodaj tabelę mapowania rezerwacji do db.py
 # ============================================================================
