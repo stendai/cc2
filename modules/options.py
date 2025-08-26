@@ -73,6 +73,81 @@ def show_options():
         show_reservations_diagnostics_tab()
 
 def show_sell_cc_tab():
+    
+    st.subheader("🎯 Sprzedaż Covered Calls")
+    
+def show_sell_cc_tab():
+    """Tab sprzedaży Covered Calls - ROZSZERZONY O POPRAWIONY PRZYCISK"""
+    st.subheader("🎯 Sprzedaż Covered Calls")
+    
+    # ===== ZAKTUALIZOWANY PRZYCISK ZWALNIANIA =====
+    st.markdown("---")
+    col_tools1, col_tools2, col_tools3 = st.columns([2, 2, 1])
+    
+    with col_tools1:
+        st.markdown("### 🔓 Narzędzia zarządzania")
+        if st.button("🔓 Zwolnij odkupione opcje", key="release_bought_back_cc", 
+                     help="Zwalnia akcje z bought_back CC (obie tabele)"):
+            with st.spinner("Zwalnianie akcji z odkupionych CC..."):
+                try:
+                    result = db.mass_fix_bought_back_cc_reservations()
+                    
+                    if result['success']:
+                        fixed_count = result.get('fixed_count', 0)
+                        shares_released = result.get('shares_released', 0)
+                        
+                        if fixed_count > 0:
+                            st.success(f"✅ {result['message']}")
+                            st.balloons()
+                        else:
+                            st.info("ℹ️ Wszystkie akcje już są prawidłowo zwolnione")
+                    else:
+                        st.error(f"❌ Błąd zwalniania: {result.get('message', 'Nieznany błąd')}")
+                        
+                except Exception as e:
+                    st.error(f"❌ Błąd systemu: {str(e)}")
+    
+    with col_tools2:
+        # Zaktualizowany status check
+        if st.button("🔍 Sprawdź status CC", key="check_cc_status"):
+            try:
+                status = db.get_blocked_cc_status()
+                
+                if 'error' in status:
+                    st.error(f"❌ {status['error']}")
+                elif status['has_problems']:
+                    st.warning(f"⚠️ {status['blocked_cc_count']} CC blokuje {status['blocked_shares']} akcji")
+                    for detail in status['details']:
+                        st.caption(f"• {detail}")
+                else:
+                    st.success("✅ Wszystkie odkupione CC są prawidłowo zwolnione")
+                    
+            except Exception as e:
+                st.error(f"❌ Błąd sprawdzania: {str(e)}")
+    
+    with col_tools3:
+        # Zaktualizowany status indicator
+        try:
+            status = db.get_blocked_cc_status()
+            
+            if 'error' in status:
+                st.error("❌")
+                st.caption("Błąd sprawdzania")
+            elif status['has_problems']:
+                st.error(f"⚠️ {status['blocked_cc_count']}")
+                st.caption("Zablokowanych CC")
+            else:
+                st.success("✅ OK")
+                st.caption("Wszystkie zwolnione")
+                
+        except:
+            st.info("❓")
+            st.caption("Sprawdź status")
+    
+    st.markdown("---")
+    # ===== KONIEC ZAKTUALIZOWANEGO PRZYCISKU =====
+    
+    # ... reszta funkcji bez zmian ...
     """Tab sprzedaży Covered Calls - PUNKTY 53-54: Kompletny formularz"""
     st.subheader("🎯 Sprzedaż Covered Calls")
     st.success("✅ **PUNKTY 53-54 UKOŃCZONE** - Formularz sprzedaży CC z zapisem")

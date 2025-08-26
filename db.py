@@ -986,123 +986,112 @@ def get_database_summary():
 # OPERACJE REZERWACJI AKCJI (CC)
 # ================================
 
+# ZAMIEŃ CAŁĄ funkcję check_cc_coverage_with_chronology w db.py NA TĘ WERSJĘ:
+
 def check_cc_coverage_with_chronology(ticker, contracts, cc_sell_date):
     """
-    NAPRAWKA: Sprawdza pokrycie CC na konkretną datę (chronologia!)
+    NAPRAWIONA: Sprawdza pokrycie CC na konkretną datę z poprawnymi kolumnami
     
-    Logika:
-    1. Weź wszystkie LOT-y tickera (quantity_total)
-    2. Odejmij sprzedaże akcji PRZED datą CC
-    3. Odejmij otwarte CC PRZED datą CC  
-    4. Sprawdź czy wystarczy na nowe CC
-    
-    Args:
-        ticker: Symbol akcji
-        contracts: Liczba kontraktów CC
-        cc_sell_date: Data sprzedaży CC (kluczowa!)
-    
-    Returns:
-        dict: Wynik sprawdzenia z chronologią
+    POPRAWKI:
+    1. sts.qty_from_lot zamiast sts.quantity_sold
+    2. Dodano AND status = 'open' dla aktywnych CC
+    3. Zwracane shares_needed nawet przy błędzie
     """
     try:
         conn = get_connection()
         if not conn:
-            return {'can_cover': False, 'message': 'Brak połączenia z bazą'}
+            return {
+                'can_cover': False, 
+                'message': 'Brak połączenia z bazą',
+                'shares_needed': contracts * 100,
+                'shares_available': 0
+            }
         
         cursor = conn.cursor()
         ticker_upper = ticker.upper()
         shares_needed = contracts * 100
         
-        # Konwertuj datę
+        # Data jako string
         if hasattr(cc_sell_date, 'strftime'):
             cc_date_str = cc_sell_date.strftime('%Y-%m-%d')
         else:
             cc_date_str = str(cc_sell_date)
         
-        print(f"🕐 CHRONOLOGIA CC: Sprawdzanie pokrycia na {cc_date_str}")
-        
-        # 1. POBIERZ WSZYSTKIE LOT-Y TICKERA (zakupione przed datą CC)
+        # 1. ŁĄCZNA ILOŚĆ AKCJI (wszystkie LOT-y tickera)
         cursor.execute("""
-            SELECT id, quantity_total, buy_date, buy_price_usd, fx_rate
+            SELECT COALESCE(SUM(quantity_total), 0) as total_shares
             FROM lots 
-            WHERE ticker = ? AND buy_date <= ?
-            ORDER BY buy_date, id
-        """, (ticker_upper, cc_date_str))
+            WHERE ticker = ?
+        """, (ticker_upper,))
         
-        lots = cursor.fetchall()
+        total_shares = cursor.fetchone()[0] or 0
         
-        if not lots:
+        if total_shares == 0:
+            conn.close()
             return {
                 'can_cover': False,
+                'message': f'Brak akcji {ticker} w portfelu',
                 'shares_needed': shares_needed,
-                'shares_available': 0,
-                'fifo_preview': [],
-                'message': f'Brak akcji {ticker} zakupionych przed {cc_date_str}'
+                'shares_available': 0
             }
         
-        total_shares = sum([lot[1] for lot in lots])  # quantity_total
-        print(f"   📦 Zakupione przed {cc_date_str}: {total_shares} akcji")
-        
-        # 2. ODEJMIJ SPRZEDAŻE AKCJI PRZED DATĄ CC
+        # 2. SPRZEDANE AKCJE PRZED DATĄ CC (poprawiona kolumna)
         cursor.execute("""
-            SELECT SUM(quantity) 
-            FROM stock_trades 
-            WHERE ticker = ? AND sell_date < ?
+            SELECT COALESCE(SUM(sts.qty_from_lot), 0) as sold_shares
+            FROM stock_trades st
+            JOIN stock_trade_splits sts ON st.id = sts.trade_id
+            JOIN lots l ON sts.lot_id = l.id
+            WHERE l.ticker = ? AND st.sell_date < ?
         """, (ticker_upper, cc_date_str))
         
         sold_before = cursor.fetchone()[0] or 0
-        print(f"   📉 Sprzedane przed {cc_date_str}: {sold_before} akcji")
         
-        # 3. ODEJMIJ CC OTWARTE PRZED DATĄ CC (które nie zostały zamknięte przed datą CC)
+        # 3. CC AKTYWNE PRZED/NA DATĘ (tylko status = 'open')
         cursor.execute("""
-            SELECT SUM(contracts * 100) 
+            SELECT COALESCE(SUM(contracts * 100), 0) as reserved_shares
             FROM options_cc 
             WHERE ticker = ? 
-            AND open_date < ?
-            AND (close_date IS NULL OR close_date >= ?)
+            AND status = 'open'
+            AND open_date <= ?
+            AND (close_date IS NULL OR close_date > ?)
         """, (ticker_upper, cc_date_str, cc_date_str))
         
         cc_reserved_before = cursor.fetchone()[0] or 0
-        print(f"   🎯 CC zarezerwowane przed {cc_date_str}: {cc_reserved_before} akcji")
         
-        # 4. KALKULACJA DOSTĘPNYCH AKCJI NA DATĘ CC
+        # 4. DOSTĘPNE AKCJE NA DATĘ CC
         available_on_cc_date = total_shares - sold_before - cc_reserved_before
-        print(f"   ✅ Dostępne na {cc_date_str}: {available_on_cc_date} akcji")
-        
-        # 5. SPRAWDŹ CZY WYSTARCZY
         can_cover = available_on_cc_date >= shares_needed
         
-        # 6. PRZYGOTUJ FIFO PREVIEW (symulacja na datę CC)
+        # 5. PODGLĄD FIFO
         fifo_preview = []
         if can_cover:
-            # Symuluj FIFO dla akcji dostępnych na datę CC
-            remaining_needed = shares_needed
-            simulated_available = available_on_cc_date
+            cursor.execute("""
+                SELECT id, quantity_total, buy_date, buy_price_usd, fx_rate, cost_pln
+                FROM lots 
+                WHERE ticker = ?
+                ORDER BY buy_date ASC, id ASC
+            """, (ticker_upper,))
             
-            for lot in lots:
+            lots_fifo = cursor.fetchall()
+            remaining_needed = shares_needed
+            
+            for lot_id, qty_total, buy_date, buy_price_usd, fx_rate, cost_pln in lots_fifo:
                 if remaining_needed <= 0:
                     break
                 
-                lot_id, quantity_total, buy_date, buy_price, fx_rate = lot
+                qty_to_reserve = min(remaining_needed, qty_total)
+                fifo_preview.append({
+                    'lot_id': lot_id,
+                    'buy_date': str(buy_date),
+                    'buy_price_usd': float(buy_price_usd),
+                    'fx_rate': float(fx_rate),  # <-- DODANE
+                    'cost_pln': float(cost_pln),  # <-- DODANE  
+                    'qty_available': qty_total,
+                    'qty_to_reserve': qty_to_reserve,
+                    'qty_remaining_after': qty_total - qty_to_reserve
+                })
                 
-                # Symuluj ile z tego LOT-a było dostępne na datę CC
-                # (uproszczenie - zakładamy FIFO)
-                qty_available_from_lot = min(quantity_total, simulated_available)
-                qty_to_reserve = min(remaining_needed, qty_available_from_lot)
-                
-                if qty_to_reserve > 0:
-                    fifo_preview.append({
-                        'lot_id': lot_id,
-                        'buy_date': buy_date,
-                        'buy_price_usd': buy_price,
-                        'fx_rate': fx_rate,
-                        'qty_available': qty_available_from_lot,
-                        'qty_to_reserve': qty_to_reserve,
-                        'qty_remaining_after': qty_available_from_lot - qty_to_reserve
-                    })
-                    
-                    remaining_needed -= qty_to_reserve
-                    simulated_available -= qty_to_reserve
+                remaining_needed -= qty_to_reserve
         
         conn.close()
         
@@ -1121,7 +1110,52 @@ def check_cc_coverage_with_chronology(ticker, contracts, cc_sell_date):
         print(f"❌ Błąd chronologii CC: {e}")
         return {
             'can_cover': False, 
-            'message': f'Błąd sprawdzania chronologii: {str(e)}'
+            'message': f'Błąd sprawdzania chronologii: {str(e)}',
+            'shares_needed': contracts * 100,
+            'shares_available': 0
+        }
+
+
+# BONUS: Uproszczona wersja jeśli nadal są problemy
+def check_cc_coverage_simple(ticker, contracts):
+    """
+    PROSTA WERSJA: Sprawdza tylko quantity_open z lots
+    
+    Użyj tej jeśli chronologiczna nadal nie działa
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'can_cover': False, 'message': 'Brak połączenia'}
+        
+        cursor = conn.cursor()
+        shares_needed = contracts * 100
+        
+        # Po prostu sprawdź quantity_open
+        cursor.execute("""
+            SELECT COALESCE(SUM(quantity_open), 0) as available
+            FROM lots 
+            WHERE ticker = ?
+        """, (ticker.upper(),))
+        
+        available = cursor.fetchone()[0] or 0
+        can_cover = available >= shares_needed
+        
+        conn.close()
+        
+        return {
+            'can_cover': can_cover,
+            'shares_needed': shares_needed, 
+            'shares_available': available,
+            'message': 'OK' if can_cover else f'Brakuje {shares_needed - available} akcji'
+        }
+        
+    except Exception as e:
+        return {
+            'can_cover': False,
+            'shares_needed': contracts * 100,
+            'shares_available': 0,
+            'message': f'Błąd: {str(e)}'
         }
 
 def reserve_shares_for_cc(ticker, contracts, cc_id):
@@ -3245,11 +3279,22 @@ def buyback_covered_call_with_fees(cc_id, buyback_price_usd, buyback_date, broke
         
         # 1. POBIERZ DANE CC
         cursor.execute("""
-            SELECT id, ticker, contracts, premium_sell_usd, open_date, expiry_date,
-                   status, fx_open, premium_sell_pln
-            FROM options_cc 
+            UPDATE options_cc 
+            SET status = 'bought_back',
+                close_date = ?,
+                premium_buyback_usd = ?,
+                fx_close = ?,
+                premium_buyback_pln = ?,
+                pl_pln = ?
             WHERE id = ?
-        """, (cc_id,))
+        """, (
+            buyback_date_str,
+            premium_buyback_usd,
+            fx_close,
+            premium_buyback_pln,
+            pl_pln,
+            cc_id
+        ))
         
         cc_record = cursor.fetchone()
         if not cc_record:
@@ -3559,11 +3604,22 @@ def partial_buyback_covered_call(cc_id, contracts_to_buyback, buyback_price_usd,
         
         # 1. POBIERZ DANE ORYGINALNEJ CC
         cursor.execute("""
-            SELECT id, ticker, contracts, strike_usd, premium_sell_usd, 
-                   open_date, expiry_date, status, fx_open, premium_sell_pln
-            FROM options_cc 
-            WHERE id = ? AND status = 'open'
-        """, (cc_id,))
+            UPDATE options_cc 
+            SET status = 'bought_back',
+                close_date = ?,
+                premium_buyback_usd = ?,
+                premium_buyback_pln = ?,
+                fx_close = ?,
+                pl_pln = ?
+            WHERE id = ?
+        """, (
+            buyback_date_str,
+            premium_buyback_usd,
+            premium_buyback_pln,
+            fx_close,
+            pl_pln,
+            cc_id
+        ))
         
         cc_record = cursor.fetchone()
         if not cc_record:
@@ -4669,6 +4725,220 @@ def save_covered_call_with_mappings(cc_data):
             'success': False,
             'message': f'Błąd zapisu CC z mapowaniami: {str(e)}'
         }
+
+# Test na końcu pliku (opcjonalny)
+if __name__ == "__main__":
+    print("Test funkcji buyback/expiry...")
+    results = test_buyback_expiry_operations()
+    
+    for test_name, result in results.items():
+        status = "✅" if result else "❌"
+        print(f"{status} {test_name}")
+
+# DODAJ TO DO db.py
+
+def mass_fix_bought_back_cc_reservations():
+    """
+    🔓 NAPRAWIONA: Zwalnia wszystkie akcje z bought_back CC
+    
+    SPRAWDZA OBIE TABELE:
+    - cc_lot_mappings (nowa tabela)
+    - options_cc_reservations (stara tabela)
+    
+    Returns:
+        dict: {'success': bool, 'message': str, 'fixed_count': int}
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # Sprawdź które tabele istnieją
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing_tables = [row[0] for row in cursor.fetchall()]
+        
+        has_new_table = 'cc_lot_mappings' in existing_tables
+        has_old_table = 'options_cc_reservations' in existing_tables
+        
+        total_fixed = 0
+        total_shares_released = 0
+        messages = []
+        
+        # 1. NAPRAWA NOWEJ TABELI (cc_lot_mappings)
+        if has_new_table:
+            cursor.execute("""
+                SELECT DISTINCT cc.id, cc.ticker, cc.contracts,
+                       COUNT(m.lot_id) as mapped_lots,
+                       COALESCE(SUM(m.shares_reserved), 0) as total_shares_blocked
+                FROM options_cc cc
+                INNER JOIN cc_lot_mappings m ON cc.id = m.cc_id
+                WHERE cc.status = 'bought_back'
+                GROUP BY cc.id, cc.ticker, cc.contracts
+            """)
+            
+            new_table_problems = cursor.fetchall()
+            
+            for cc_id, ticker, contracts, mapped_lots, total_shares_blocked in new_table_problems:
+                # Pobierz mapowania
+                cursor.execute("""
+                    SELECT lot_id, shares_reserved 
+                    FROM cc_lot_mappings 
+                    WHERE cc_id = ?
+                """, (cc_id,))
+                
+                mappings = cursor.fetchall()
+                
+                # Zwolnij akcje z LOT-ów
+                for lot_id, shares_reserved in mappings:
+                    cursor.execute("""
+                        UPDATE lots 
+                        SET quantity_open = quantity_open + ?
+                        WHERE id = ?
+                    """, (shares_reserved, lot_id))
+                    total_shares_released += shares_reserved
+                
+                # Usuń mapowania
+                cursor.execute("DELETE FROM cc_lot_mappings WHERE cc_id = ?", (cc_id,))
+                total_fixed += 1
+            
+            if new_table_problems:
+                messages.append(f"Nowa tabela: {len(new_table_problems)} CC")
+        
+        # 2. NAPRAWA STAREJ TABELI (options_cc_reservations)
+        if has_old_table:
+            cursor.execute("""
+                SELECT r.cc_id, r.lot_id, r.qty_reserved, cc.ticker
+                FROM options_cc_reservations r
+                JOIN options_cc cc ON r.cc_id = cc.id
+                WHERE cc.status = 'bought_back'
+            """)
+            
+            old_reservations = cursor.fetchall()
+            
+            # Zwolnij akcje z LOT-ów
+            old_cc_ids = set()
+            for cc_id, lot_id, qty_reserved, ticker in old_reservations:
+                cursor.execute("""
+                    UPDATE lots 
+                    SET quantity_open = quantity_open + ?
+                    WHERE id = ?
+                """, (qty_reserved, lot_id))
+                total_shares_released += qty_reserved
+                old_cc_ids.add(cc_id)
+            
+            # Usuń stare rezerwacje
+            if old_reservations:
+                cursor.execute("""
+                    DELETE FROM options_cc_reservations 
+                    WHERE cc_id IN (
+                        SELECT id FROM options_cc WHERE status = 'bought_back'
+                    )
+                """)
+                total_fixed += len(old_cc_ids)
+                messages.append(f"Stara tabela: {len(old_reservations)} rezerwacji")
+        
+        # Sprawdź czy coś naprawiono
+        if total_fixed == 0 and total_shares_released == 0:
+            conn.close()
+            return {
+                'success': True,
+                'message': 'Wszystkie akcje już są prawidłowo zwolnione',
+                'fixed_count': 0,
+                'shares_released': 0
+            }
+        
+        conn.commit()
+        conn.close()
+        
+        # Stwórz wiadomość
+        message_parts = [f'Zwolniono {total_shares_released} akcji']
+        if messages:
+            message_parts.extend(messages)
+        
+        return {
+            'success': True,
+            'message': ' | '.join(message_parts),
+            'fixed_count': total_fixed,
+            'shares_released': total_shares_released
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        return {
+            'success': False, 
+            'message': f'Błąd zwalniania akcji: {str(e)}',
+            'fixed_count': 0
+        }
+
+
+# DODAJ TAKŻE TĘ FUNKCJĘ DO POKAZYWANIA STATUSU:
+
+def get_blocked_cc_status():
+    """
+    🔍 SPRAWDZA: Ile CC blokuje akcje w obu tabelach
+    
+    Returns:
+        dict: Status blokad w systemie
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'error': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # Sprawdź tabele
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        
+        blocked_count = 0
+        blocked_shares = 0
+        details = []
+        
+        # Nowa tabela
+        if 'cc_lot_mappings' in tables:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT cc.id), COALESCE(SUM(m.shares_reserved), 0)
+                FROM options_cc cc
+                INNER JOIN cc_lot_mappings m ON cc.id = m.cc_id
+                WHERE cc.status = 'bought_back'
+            """)
+            result = cursor.fetchone()
+            if result and result[0] > 0:
+                blocked_count += result[0]
+                blocked_shares += result[1]
+                details.append(f"Nowa tabela: {result[0]} CC, {result[1]} akcji")
+        
+        # Stara tabela
+        if 'options_cc_reservations' in tables:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT r.cc_id), COALESCE(SUM(r.qty_reserved), 0)
+                FROM options_cc_reservations r
+                JOIN options_cc cc ON r.cc_id = cc.id
+                WHERE cc.status = 'bought_back'
+            """)
+            result = cursor.fetchone()
+            if result and result[0] > 0:
+                blocked_count += result[0]
+                blocked_shares += result[1]
+                details.append(f"Stara tabela: {result[0]} CC, {result[1]} akcji")
+        
+        conn.close()
+        
+        return {
+            'blocked_cc_count': blocked_count,
+            'blocked_shares': blocked_shares,
+            'details': details,
+            'has_problems': blocked_count > 0
+        }
+        
+    except Exception as e:
+        return {'error': f'Błąd sprawdzania: {str(e)}'}
 
 # Test na końcu pliku (opcjonalny)
 if __name__ == "__main__":

@@ -299,7 +299,7 @@ def show_stocks():
     st.info("Zarządzanie portfelem akcji z systemem FIFO")
     
     # ZAKŁADKI POZOSTAJĄ IDENTYCZNE
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 LOT-y", "💰 Sprzedaże", "📊 Podsumowanie", "📋 Tabela LOT-ów", "🛏️ Historia US"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 LOT-y", "💰 Sprzedaże", "📋 Tabela LOT-ów", "🛏️ Historia US"])
     
     with tab1:
         show_lots_tab()  # ORYGINALNA
@@ -308,12 +308,9 @@ def show_stocks():
         show_sales_tab()  # ORYGINALNA
     
     with tab3:
-        show_summary_tab()  # ORYGINALNA
-    
-    with tab4:
         show_lots_table()  # PUNKT 46+48+49 - Z FILTRAMI + EKSPORT
     
-    with tab5:
+    with tab4:
         show_sales_table()  # PUNKT 47+48+49 - Z FILTRAMI + EKSPORT
 
 def show_lots_tab():
@@ -1303,349 +1300,73 @@ def save_sale_to_database(sell_data):
             conn.close()
         return False
 
-def show_summary_tab():
-    """
-    PUNKT 50: Dashboard w zakładce Podsumowanie - kompletne wzbogacenie
-    """
-    st.subheader("📊 Dashboard Stocks")
-    st.markdown("*PUNKT 50: Kompletne podsumowanie modułu Stocks*")
-    
-    try:
-        # Pobranie danych z bazy
-        lots_stats = db.get_lots_stats()
-        
-        # Pobranie szczegółowych danych LOT-ów
-        conn = db.get_connection()
-        if not conn:
-            st.error("❌ Brak połączenia z bazą danych")
-            return
-        
-        cursor = conn.cursor()
-        
-        # LOT-y z detalami
-        cursor.execute("""
-            SELECT 
-                id, ticker, quantity_total, quantity_open, buy_price_usd,
-                broker_fee_usd, reg_fee_usd, buy_date, fx_rate, cost_pln
-            FROM lots 
-            ORDER BY ticker, buy_date
-        """)
-        lots = cursor.fetchall()
-        
-        # Sprzedaże z detalami
-        cursor.execute("""
-            SELECT 
-                id, ticker, quantity, sell_price_usd, sell_date, 
-                proceeds_pln, cost_pln, pl_pln
-            FROM stock_trades 
-            ORDER BY sell_date DESC
-        """)
-        trades = cursor.fetchall()
-        
-        conn.close()
-        
-        if not lots:
-            st.info("📝 Brak LOT-ów w portfelu. Rozpocznij od dodania pierwszego zakupu.")
-            return
-        
-        # 🎯 SEKCJA 1: KPI DASHBOARD
-        st.markdown("### 🏆 Kluczowe wskaźniki")
-        
-        # Wyliczenia podstawowe
-        total_lots = len(lots)
-        active_lots = len([lot for lot in lots if lot[3] > 0])  # quantity_open > 0
-        total_shares = sum([lot[3] for lot in lots])  # quantity_open
-        total_cost_pln = sum([lot[9] for lot in lots if lot[3] > 0])  # cost_pln dla aktywnych
-        
-        # Statystyki sprzedaży
-        total_trades = len(trades)
-        total_proceeds_pln = sum([trade[5] for trade in trades]) if trades else 0
-        total_pl_pln = sum([trade[7] for trade in trades]) if trades else 0
-        
-        # KPI Metryki
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric("📦 LOT-y", f"{active_lots}/{total_lots}")
-            st.caption("Aktywne/Łącznie")
-        
-        with col2:
-            st.metric("📊 Akcje", f"{total_shares:,}")
-            st.caption("W portfelu")
-        
-        with col3:
-            st.metric("💰 Koszt", f"{total_cost_pln:,.0f} zł")
-            st.caption("Łączny koszt PLN")
-        
-        with col4:
-            if total_trades > 0:
-                st.metric("📈 Sprzedaże", f"{total_trades}")
-                st.caption(f"Wpływy: {total_proceeds_pln:,.0f} zł")
-            else:
-                st.metric("📈 Sprzedaże", "0")
-                st.caption("Brak transakcji")
-        
-        with col5:
-            if total_pl_pln != 0:
-                pl_color = "normal" if total_pl_pln >= 0 else "inverse"
-                st.metric("💵 P/L Łączny", f"{total_pl_pln:,.0f} zł", delta_color=pl_color)
-                st.caption("Zrealizowany")
-            else:
-                st.metric("💵 P/L Łączny", "0 zł")
-                st.caption("Brak realizacji")
-        
-        # 🎯 SEKCJA 2: ALOKACJA PORTFELA
-        st.markdown("---")
-        st.markdown("### 📈 Alokacja portfela")
-        
-        col_alloc1, col_alloc2 = st.columns([2, 1])
-        
-        with col_alloc1:
-            # Przygotuj dane per ticker
-            ticker_allocation = {}
-            for lot in lots:
-                ticker = lot[1]
-                qty_open = lot[3]
-                cost_per_share_usd = lot[4] + (lot[5] + lot[6]) / lot[2]  # price + fees/qty_total
-                fx_rate = lot[8]
-                current_value_pln = cost_per_share_usd * qty_open * fx_rate
-                
-                if qty_open > 0:
-                    if ticker not in ticker_allocation:
-                        ticker_allocation[ticker] = {
-                            'shares': 0,
-                            'value_pln': 0,
-                            'lots': 0
-                        }
-                    
-                    ticker_allocation[ticker]['shares'] += qty_open
-                    ticker_allocation[ticker]['value_pln'] += current_value_pln
-                    ticker_allocation[ticker]['lots'] += 1
-            
-            if ticker_allocation:
-                # Wykres pie chart (symulacja)
-                st.markdown("**💼 Rozkład wartości per ticker:**")
-                
-                chart_data = []
-                total_portfolio_value = sum([data['value_pln'] for data in ticker_allocation.values()])
-                
-                for ticker, data in ticker_allocation.items():
-                    percentage = (data['value_pln'] / total_portfolio_value) * 100
-                    chart_data.append({
-                        'Ticker': ticker,
-                        'Wartość PLN': data['value_pln'],
-                        'Udział %': percentage,
-                        'Akcje': data['shares'],
-                        'LOT-y': data['lots']
-                    })
-                
-                # Sortuj po wartości
-                chart_data.sort(key=lambda x: x['Wartość PLN'], reverse=True)
-                
-                # Tabela z procentami
-                for item in chart_data:
-                    col_ticker, col_value, col_pct = st.columns([1, 2, 1])
-                    with col_ticker:
-                        st.write(f"**{item['Ticker']}**")
-                    with col_value:
-                        progress_val = min(item['Udział %'] / 100, 1.0)
-                        st.progress(progress_val)
-                        st.caption(f"{item['Akcje']} akcji, {item['LOT-y']} LOT-ów")
-                    with col_pct:
-                        st.write(f"{item['Udział %']:.1f}%")
-                        st.caption(f"{item['Wartość PLN']:,.0f} zł")
-        
-        with col_alloc2:
-            st.markdown("**🎯 Koncentracja:**")
-            
-            if ticker_allocation:
-                sorted_tickers = sorted(ticker_allocation.items(), key=lambda x: x[1]['value_pln'], reverse=True)
-                
-                # Top 3 pozycje
-                for i, (ticker, data) in enumerate(sorted_tickers[:3]):
-                    percentage = (data['value_pln'] / total_portfolio_value) * 100
-                    icon = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
-                    st.write(f"{icon} **{ticker}**: {percentage:.1f}%")
-                
-                st.markdown("---")
-                
-                # Statystyki koncentracji
-                top_3_pct = sum([(data['value_pln'] / total_portfolio_value) * 100 
-                               for _, data in sorted_tickers[:3]])
-                
-                st.metric("Top 3 koncentracja", f"{top_3_pct:.1f}%")
-                
-                if top_3_pct > 75:
-                    st.warning("⚠️ Wysoka koncentracja")
-                elif top_3_pct > 50:
-                    st.info("ℹ️ Średnia koncentracja")
-                else:
-                    st.success("✅ Dobra dywersyfikacja")
-        
-        # 🎯 SEKCJA 3: PERFORMANCE SPRZEDAŻY
-        if trades:
-            st.markdown("---")
-            st.markdown("### 🏆 Performance sprzedaży")
-            
-            col_perf1, col_perf2 = st.columns(2)
-            
-            with col_perf1:
-                st.markdown("**🎯 Najlepsze transakcje:**")
-                
-                # Top 5 zyskownych
-                profitable_trades = [trade for trade in trades if trade[7] > 0]  # pl_pln > 0
-                profitable_trades.sort(key=lambda x: x[7], reverse=True)  # sortuj po pl_pln
-                
-                if profitable_trades:
-                    for i, trade in enumerate(profitable_trades[:5]):
-                        trade_id, ticker, quantity, sell_price, sell_date, proceeds_pln, cost_pln, pl_pln = trade
-                        pl_percent = (pl_pln / cost_pln) * 100 if cost_pln > 0 else 0
-                        
-                        st.write(f"🟢 **#{trade_id}** {ticker} ({sell_date})")
-                        st.caption(f"   +{pl_pln:,.0f} zł ({pl_percent:+.1f}%)")
-                else:
-                    st.info("Brak zyskownych transakcji")
-            
-            with col_perf2:
-                st.markdown("**📉 Transakcje stratne:**")
-                
-                # Top 5 stratnych
-                losing_trades = [trade for trade in trades if trade[7] < 0]  # pl_pln < 0
-                losing_trades.sort(key=lambda x: x[7])  # sortuj po pl_pln (najmniejsze pierwsze)
-                
-                if losing_trades:
-                    for i, trade in enumerate(losing_trades[:5]):
-                        trade_id, ticker, quantity, sell_price, sell_date, proceeds_pln, cost_pln, pl_pln = trade
-                        pl_percent = (pl_pln / cost_pln) * 100 if cost_pln > 0 else 0
-                        
-                        st.write(f"🔴 **#{trade_id}** {ticker} ({sell_date})")
-                        st.caption(f"   {pl_pln:,.0f} zł ({pl_percent:.1f}%)")
-                else:
-                    st.success("✅ Brak transakcji stratnych!")
-            
-            # Statystyki ogólne
-            st.markdown("**📊 Statystyki transakcji:**")
-            col_stats1, col_stats2, col_stats3, col_stats4 = st.columns(4)
-            
-            with col_stats1:
-                win_rate = (len(profitable_trades) / len(trades)) * 100
-                st.metric("🎯 Win Rate", f"{win_rate:.1f}%")
-            
-            with col_stats2:
-                avg_pl = total_pl_pln / len(trades) if trades else 0
-                st.metric("📊 Średni P/L", f"{avg_pl:,.0f} zł")
-            
-            with col_stats3:
-                best_trade = max([trade[7] for trade in trades]) if trades else 0
-                st.metric("🏆 Najlepszy", f"+{best_trade:,.0f} zł")
-            
-            with col_stats4:
-                worst_trade = min([trade[7] for trade in trades]) if trades else 0
-                if worst_trade < 0:
-                    st.metric("📉 Najgorszy", f"{worst_trade:,.0f} zł")
-                else:
-                    st.metric("📉 Najgorszy", "0 zł")
-        
-        # 🎯 SEKCJA 4: CASHFLOW OVERVIEW
-        st.markdown("---")
-        st.markdown("### 💸 Przegląd cashflow")
-        
-        try:
-            # Pobranie cashflows związanych ze stocks
-            conn = db.get_connection()
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT type, amount_usd, amount_pln, date 
-                    FROM cashflows 
-                    WHERE type IN ('stock_buy', 'stock_sell')
-                    ORDER BY date DESC
-                """)
-                
-                cashflows = cursor.fetchall()
-                conn.close()
-                
-                if cashflows:
-                    buy_flows = [cf for cf in cashflows if cf[0] == 'stock_buy']
-                    sell_flows = [cf for cf in cashflows if cf[0] == 'stock_sell']
-                    
-                    total_invested_usd = abs(sum([cf[1] for cf in buy_flows]))  # Wartość bezwzględna
-                    total_proceeds_usd = sum([cf[1] for cf in sell_flows])
-                    
-                    total_invested_pln = abs(sum([cf[2] for cf in buy_flows]))
-                    total_proceeds_flow_pln = sum([cf[2] for cf in sell_flows])
-                    
-                    col_cash1, col_cash2, col_cash3 = st.columns(3)
-                    
-                    with col_cash1:
-                        st.metric("💰 Zainwestowano", f"${total_invested_usd:,.0f}")
-                        st.caption(f"{total_invested_pln:,.0f} zł")
-                    
-                    with col_cash2:
-                        st.metric("💵 Sprzedano", f"${total_proceeds_usd:,.0f}")
-                        st.caption(f"{total_proceeds_flow_pln:,.0f} zł")
-                    
-                    with col_cash3:
-                        net_flow_usd = total_proceeds_usd - total_invested_usd
-                        net_flow_pln = total_proceeds_flow_pln - total_invested_pln
-                        
-                        flow_color = "normal" if net_flow_usd >= 0 else "inverse"
-                        st.metric("📊 Net Flow", f"${net_flow_usd:,.0f}", delta_color=flow_color)
-                        st.caption(f"{net_flow_pln:,.0f} zł")
-                    
-                    # Status kapitału
-                    if net_flow_usd > 0:
-                        st.success(f"✅ Odzyskano {net_flow_usd:,.0f} USD więcej niż zainwestowano")
-                    elif net_flow_usd < 0:
-                        remaining_invested = abs(net_flow_usd)
-                        st.info(f"💼 W portfelu pozostało {remaining_invested:,.0f} USD kapitału")
-                    else:
-                        st.info("⚖️ Cashflow zrównoważony")
-                else:
-                    st.info("💡 Brak cashflows dla stocks")
-            
-        except Exception as e:
-            st.warning(f"⚠️ Nie można pobrać cashflows: {e}")
-        
-        
-        # ===============================================
-# DODAJ DO show_summary_tab() PO show_etap3_summary()
-# ===============================================
-
-# W funkcji show_summary_tab() dodaj po show_etap3_summary():
-
-        # PUNKT 51.2: FINALNE TESTY
-        if st.button("🧪 Uruchom finalne testy systemu", type="primary", use_container_width=True):
-            run_comprehensive_tests()
-        
-    except Exception as e:
-        st.error(f"❌ Błąd dashboardu: {e}")
-        
-        # Podstawowe statystyki jako fallback
-        st.markdown("### 📊 Podstawowe statystyki")
-        try:
-            lots_stats = db.get_lots_stats()
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("LOT-y łącznie", lots_stats['total_lots'])
-            with col2:
-                st.metric("📊 Akcje w portfelu", lots_stats['open_shares'])
-                
-        except Exception as e2:
-            st.error(f"❌ Błąd podstawowych statystyk: {e2}")
-
-# ===============================================
-# PUNKT 48: TYLKO DODAJ FILTRY - ZACHOWAJ CAŁĄ FUNKCJONALNOŚĆ
-# ===============================================
-
 def show_lots_table():
     """
     PUNKT 46+48: Tabela LOT-ów z filtrami (ZACHOWANA CAŁA FUNKCJONALNOŚĆ)
     """
     st.subheader("📋 Tabela LOT-ów")
     st.markdown("*PUNKT 46+48: Kompletny podgląd portfela LOT-ów z filtrami*")
-    
+        # DODAJ TO - CC SUMMARY:
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        
+        # Podsumowanie CC vs LOT-y
+        cursor.execute("""
+            SELECT 
+                l.ticker,
+                SUM(l.quantity_total) as total_shares,
+                SUM(l.quantity_open) as available_shares,
+                COUNT(DISTINCT l.id) as lots_count,
+                COUNT(DISTINCT cc.id) as open_cc_count
+            FROM lots l
+            LEFT JOIN options_cc cc ON l.ticker = cc.ticker AND cc.status = 'open'
+            GROUP BY l.ticker
+            ORDER BY l.ticker
+        """)
+        
+        ticker_summary = cursor.fetchall()
+        
+        if ticker_summary:
+            st.markdown("### 📊 Podsumowanie portfela")
+            
+            summary_data = []
+            for ticker, total, available, lots_count, cc_count in ticker_summary:
+                under_cc = total - available
+                status = "🟢 Dostępne" if available == total else "🔒 Pod CC" if available == 0 else "🟡 Niedostępne"
+                
+                summary_data.append({
+                    'Status': status,
+                    'Ticker': ticker,
+                    'Total': total,
+                    'Available': available,
+                    'Under CC': under_cc,
+                    'LOT-y': lots_count,
+                    'Open CC': cc_count or 0
+                })
+            
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(
+                summary_df,
+                use_container_width=True,
+                height=200,
+                column_config={
+                    'Status': st.column_config.TextColumn('', width=50),
+                    'Ticker': st.column_config.TextColumn('Ticker', width=80),
+                    'Total': st.column_config.NumberColumn('Total Shares', width=100),
+                    'Available': st.column_config.NumberColumn('Available', width=100),
+                    'Under CC': st.column_config.NumberColumn('Under CC', width=100),
+                    'LOT-y': st.column_config.NumberColumn('LOT-y', width=80),
+                    'Open CC': st.column_config.NumberColumn('Open CC', width=80)
+                }
+            )
+            
+            st.markdown("---")
+        
+        conn.close()
+        
+    except Exception as e:
+        st.warning(f"Nie można pobrać podsumowania CC: {e}")
     # Pobranie wszystkich LOT-ów z bazy
     conn = db.get_connection()
     if not conn:
@@ -1781,11 +1502,14 @@ def show_lots_table():
             cost_per_share_usd = buy_price + (broker_fee + reg_fee) / qty_total
             current_cost_pln = (cost_per_share_usd * qty_open * fx_rate)
             
-            # Status LOT-a
-            if qty_open == 0:
-                status = "🔴 Wyprzedany"
+            # Status LOT-a - POPRAWIONY
+            reserved_shares = qty_total - qty_open
+            if qty_open == 0 and reserved_shares > 0:
+                status = "🔒 Pod CC"
+            elif qty_open == 0 and reserved_shares == 0:
+                status = "❌ Sprzedany"  # Teoretyczny przypadek - LOT powinien być usunięty
             elif qty_open == qty_total:
-                status = "🟢 Pełny"
+                status = "🟢 Dostępny"
             else:
                 status = f"🟡 Częściowy ({qty_open}/{qty_total})"
             
@@ -1793,8 +1517,9 @@ def show_lots_table():
                 'ID': lot_id,
                 'Ticker': ticker,
                 'Status': status,
-                'Qty Open': qty_open,
                 'Qty Total': qty_total,
+                'Qty Available': qty_open,
+                'Under CC': reserved_shares,  # NOWA KOLUMNA
                 'Buy Price': f"${buy_price:.2f}",
                 'Cost/Share': f"${cost_per_share_usd:.2f}",
                 'Buy Date': buy_date,
@@ -1817,13 +1542,14 @@ def show_lots_table():
                 'ID': st.column_config.NumberColumn('ID', width=60),
                 'Ticker': st.column_config.TextColumn('Ticker', width=80),
                 'Status': st.column_config.TextColumn('Status', width=120),
-                'Qty Open': st.column_config.NumberColumn('Qty Open', width=90),
-                'Qty Total': st.column_config.NumberColumn('Qty Total', width=90),
-                'Buy Price': st.column_config.TextColumn('Buy Price', width=100),
-                'Cost/Share': st.column_config.TextColumn('Cost/Share', width=100),
-                'Buy Date': st.column_config.DateColumn('Buy Date', width=120),
-                'FX Rate': st.column_config.TextColumn('FX Rate', width=100),
-                'Cost PLN': st.column_config.TextColumn('Cost PLN', width=120),
+                'Qty Total': st.column_config.NumberColumn('Total', width=80),
+                'Qty Available': st.column_config.NumberColumn('Available', width=90),
+                'Under CC': st.column_config.NumberColumn('Pod CC', width=80),  # NOWA KOLUMNA
+                'Buy Price': st.column_config.TextColumn('Buy Price', width=90),
+                'Cost/Share': st.column_config.TextColumn('Cost/Share', width=90),
+                'Buy Date': st.column_config.DateColumn('Buy Date', width=100),
+                'FX Rate': st.column_config.TextColumn('FX Rate', width=80),
+                'Cost PLN': st.column_config.TextColumn('Current Cost', width=120),
                 'Original Cost': st.column_config.TextColumn('Original Cost', width=120)
             }
         )
