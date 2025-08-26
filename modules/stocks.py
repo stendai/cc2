@@ -962,7 +962,8 @@ def show_fifo_preview(ticker):
         st.write(f"**Dostępne akcje {ticker}: {available}**")
         
         if available > 0:
-            lots = db.get_lots_by_ticker(ticker, only_open=True)
+            tax_fifo_result = db.calculate_tax_fifo_allocation(ticker, quantity)
+            fifo_allocation = tax_fifo_result['fifo_allocation']
             st.write(f"**LOT-y w kolejności FIFO ({len(lots)}):**")
             
             # Pokaż wszystkie LOT-y z detalami
@@ -1302,320 +1303,433 @@ def save_sale_to_database(sell_data):
 
 def show_lots_table():
     """
-    PUNKT 46+48: Tabela LOT-ów z filtrami (ZACHOWANA CAŁA FUNKCJONALNOŚĆ)
+    🔥 NOWA TABELA LOT-ÓW - BEZ KŁAMSTW I ZGADYWANIA!
+    
+    ZAMIEŃ całą funkcję show_lots_table() w modules/stocks.py
     """
-    st.subheader("📋 Tabela LOT-ów")
-    st.markdown("*PUNKT 46+48: Kompletny podgląd portfela LOT-ów z filtrami*")
-        # DODAJ TO - CC SUMMARY:
-    try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Podsumowanie CC vs LOT-y
-        cursor.execute("""
-            SELECT 
-                l.ticker,
-                SUM(l.quantity_total) as total_shares,
-                SUM(l.quantity_open) as available_shares,
-                COUNT(DISTINCT l.id) as lots_count,
-                COUNT(DISTINCT cc.id) as open_cc_count
-            FROM lots l
-            LEFT JOIN options_cc cc ON l.ticker = cc.ticker AND cc.status = 'open'
-            GROUP BY l.ticker
-            ORDER BY l.ticker
-        """)
-        
-        ticker_summary = cursor.fetchall()
-        
-        if ticker_summary:
-            st.markdown("### 📊 Podsumowanie portfela")
-            
-            summary_data = []
-            for ticker, total, available, lots_count, cc_count in ticker_summary:
-                under_cc = total - available
-                status = "🟢 Dostępne" if available == total else "🔒 Pod CC" if available == 0 else "🟡 Niedostępne"
-                
-                summary_data.append({
-                    'Status': status,
-                    'Ticker': ticker,
-                    'Total': total,
-                    'Available': available,
-                    'Under CC': under_cc,
-                    'LOT-y': lots_count,
-                    'Open CC': cc_count or 0
-                })
-            
-            summary_df = pd.DataFrame(summary_data)
-            st.dataframe(
-                summary_df,
-                use_container_width=True,
-                height=200,
-                column_config={
-                    'Status': st.column_config.TextColumn('', width=50),
-                    'Ticker': st.column_config.TextColumn('Ticker', width=80),
-                    'Total': st.column_config.NumberColumn('Total Shares', width=100),
-                    'Available': st.column_config.NumberColumn('Available', width=100),
-                    'Under CC': st.column_config.NumberColumn('Under CC', width=100),
-                    'LOT-y': st.column_config.NumberColumn('LOT-y', width=80),
-                    'Open CC': st.column_config.NumberColumn('Open CC', width=80)
-                }
-            )
-            
-            st.markdown("---")
-        
-        conn.close()
-        
-    except Exception as e:
-        st.warning(f"Nie można pobrać podsumowania CC: {e}")
-    # Pobranie wszystkich LOT-ów z bazy
-    conn = db.get_connection()
-    if not conn:
-        st.error("❌ Brak połączenia z bazą danych")
-        return
+    st.subheader("📋 Tabela LOT-ów - PRAWDZIWE DANE")
+    st.markdown("*Koniec z zgadywaniem - sprawdzamy REALNIE co się dzieje z akcjami!*")
     
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
-                id, ticker, quantity_total, quantity_open, buy_price_usd,
-                broker_fee_usd, reg_fee_usd, buy_date, fx_rate, cost_pln, created_at
-            FROM lots 
-            ORDER BY ticker, buy_date, id
-        """)
-        
-        lots = cursor.fetchall()
-        conn.close()
-        
-        if not lots:
-            st.info("📝 Brak LOT-ów w portfelu. Dodaj swój pierwszy zakup w zakładce 'LOT-y'!")
+        conn = db.get_connection()
+        if not conn:
+            st.error("❌ Brak połączenia z bazą danych")
             return
         
-        # 🎯 PUNKT 48: FILTRY W EXPANDER (NOWE)
-        with st.expander("🔍 Filtry i sortowanie", expanded=False):
-            col_filter1, col_filter2, col_filter3, col_filter4 = st.columns(4)
-            
-            with col_filter1:
-                all_tickers = sorted(list(set([lot[1] for lot in lots])))
-                selected_tickers = st.multiselect(
-                    "Tickery:",
-                    options=all_tickers,
-                    default=all_tickers,
-                    key="lots_ticker_filter"
-                )
-            
-            with col_filter2:
-                status_options = ["Wszystkie", "Pełne", "Częściowe", "Wyprzedane"]
-                selected_status = st.selectbox(
-                    "Status:",
-                    options=status_options,
-                    index=0,
-                    key="lots_status_filter"
-                )
-            
-            with col_filter3:
-                buy_dates = [datetime.strptime(lot[7], '%Y-%m-%d').date() if isinstance(lot[7], str) else lot[7] for lot in lots]
-                min_date = min(buy_dates)
-                max_date = max(buy_dates)
-                
-                date_range = st.date_input(
-                    "Zakres dat:",
-                    value=(min_date, max_date),
-                    min_value=min_date,
-                    max_value=max_date,
-                    key="lots_date_filter"
-                )
-            
-            with col_filter4:
-                sort_options = {
-                    "Data (najnowsze)": ("buy_date", True),
-                    "Data (najstarsze)": ("buy_date", False),
-                    "Ticker A-Z": ("ticker", False),
-                    "Koszt (najwyższy)": ("cost_pln", True),
-                    "Ilość (największa)": ("quantity_open", True)
-                }
-                
-                selected_sort = st.selectbox(
-                    "Sortowanie:",
-                    options=list(sort_options.keys()),
-                    index=0,
-                    key="lots_sort_filter"
-                )
+        cursor = conn.cursor()
         
-        # APLIKACJA FILTRÓW (NOWE)
-        filtered_lots = []
+        # =====================================
+        # SPRAWDZENIE STRUKTURY BAZY
+        # =====================================
         
-        for lot in lots:
-            lot_id, ticker, qty_total, qty_open, buy_price, broker_fee, reg_fee, buy_date, fx_rate, cost_pln, created_at = lot
+        # Sprawdź czy istnieją tabele mapowań CC
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name IN ('cc_lot_mappings', 'options_cc_reservations')
+        """)
+        mapping_tables = [row[0] for row in cursor.fetchall()]
+        
+        has_new_mappings = 'cc_lot_mappings' in mapping_tables
+        has_old_mappings = 'options_cc_reservations' in mapping_tables
+        
+        # =====================================
+        # GŁÓWNE ZAPYTANIE - Z PRAWDZIWYMI DANYMI
+        # =====================================
+        
+        if has_new_mappings:
+            # WERSJA Z NOWYMI MAPOWANIAMI (cc_lot_mappings)
+            query = """
+            SELECT 
+                l.id as lot_id,
+                l.ticker,
+                l.quantity_total,
+                l.quantity_open,
+                l.buy_price_usd,
+                l.buy_date,
+                l.fx_rate,
+                l.cost_pln,
+                l.broker_fee_usd,
+                l.reg_fee_usd,
+                
+                -- ILE REALNIE POD CC (z mapowań)
+                COALESCE(SUM(cm.shares_reserved), 0) as qty_under_cc_real,
+                
+                -- ILE SPRZEDANE (quantity_total - quantity_open - qty_under_cc)
+                (l.quantity_total - l.quantity_open - COALESCE(SUM(cm.shares_reserved), 0)) as qty_sold_real,
+                
+                -- SPRAWDZENIE MATEMATYCZNE
+                (l.quantity_open + COALESCE(SUM(cm.shares_reserved), 0) + 
+                 (l.quantity_total - l.quantity_open - COALESCE(SUM(cm.shares_reserved), 0))) as math_check,
+                
+                -- LISTA CC UŻYWAJĄCYCH TEN LOT
+                GROUP_CONCAT(DISTINCT cc.id || ':' || cm.shares_reserved) as cc_details
+                
+            FROM lots l
+            LEFT JOIN cc_lot_mappings cm ON l.id = cm.lot_id
+            LEFT JOIN options_cc cc ON cm.cc_id = cc.id AND cc.status = 'open'
+            GROUP BY l.id, l.ticker, l.quantity_total, l.quantity_open, l.buy_price_usd, 
+                     l.buy_date, l.fx_rate, l.cost_pln, l.broker_fee_usd, l.reg_fee_usd
+            ORDER BY l.ticker ASC, l.buy_date ASC, l.id ASC
+            """
             
-            # Filtr tickery
-            if ticker not in selected_tickers:
+        elif has_old_mappings:
+            # WERSJA ZE STARYMI MAPOWANIAMI (options_cc_reservations)
+            query = """
+            SELECT 
+                l.id as lot_id,
+                l.ticker,
+                l.quantity_total,
+                l.quantity_open,
+                l.buy_price_usd,
+                l.buy_date,
+                l.fx_rate,
+                l.cost_pln,
+                l.broker_fee_usd,
+                l.reg_fee_usd,
+                
+                -- ILE POD CC (stare mapowania)
+                COALESCE(SUM(ocr.qty_reserved), 0) as qty_under_cc_real,
+                
+                -- ILE SPRZEDANE
+                (l.quantity_total - l.quantity_open - COALESCE(SUM(ocr.qty_reserved), 0)) as qty_sold_real,
+                
+                -- SPRAWDZENIE MATEMATYCZNE
+                (l.quantity_open + COALESCE(SUM(ocr.qty_reserved), 0) + 
+                 (l.quantity_total - l.quantity_open - COALESCE(SUM(ocr.qty_reserved), 0))) as math_check,
+                
+                -- DETALE CC
+                GROUP_CONCAT(DISTINCT cc.id || ':' || ocr.qty_reserved) as cc_details
+                
+            FROM lots l
+            LEFT JOIN options_cc_reservations ocr ON l.id = ocr.lot_id
+            LEFT JOIN options_cc cc ON ocr.cc_id = cc.id AND cc.status = 'open'
+            GROUP BY l.id, l.ticker, l.quantity_total, l.quantity_open, l.buy_price_usd,
+                     l.buy_date, l.fx_rate, l.cost_pln, l.broker_fee_usd, l.reg_fee_usd
+            ORDER BY l.ticker ASC, l.buy_date ASC, l.id ASC
+            """
+        else:
+            # FALLBACK - BRAK MAPOWAŃ (zgadywanie jak wcześniej, ale z ostrzeżeniem)
+            query = """
+            SELECT 
+                l.id as lot_id,
+                l.ticker,
+                l.quantity_total,
+                l.quantity_open,
+                l.buy_price_usd,
+                l.buy_date,
+                l.fx_rate,
+                l.cost_pln,
+                l.broker_fee_usd,
+                l.reg_fee_usd,
+                
+                -- ZGADYWANIE (brak mapowań)
+                CASE 
+                    WHEN l.quantity_open = 0 AND l.quantity_total > 0 THEN
+                        -- Sprawdź czy ticker ma otwarte CC
+                        CASE 
+                            WHEN EXISTS (SELECT 1 FROM options_cc WHERE ticker = l.ticker AND status = 'open') 
+                            THEN l.quantity_total  -- Zakładaj że wszystko pod CC
+                            ELSE 0  -- Prawdopodobnie sprzedane
+                        END
+                    ELSE 0
+                END as qty_under_cc_real,
+                
+                -- ILE SPRZEDANE (pozostałość)
+                CASE
+                    WHEN l.quantity_open = 0 AND l.quantity_total > 0 THEN
+                        CASE 
+                            WHEN EXISTS (SELECT 1 FROM options_cc WHERE ticker = l.ticker AND status = 'open') 
+                            THEN 0  -- Zakładaj że nic nie sprzedane
+                            ELSE l.quantity_total  -- Wszystko sprzedane
+                        END
+                    ELSE 0
+                END as qty_sold_real,
+                
+                -- MATEMATYKA (może się nie zgadzać!)
+                l.quantity_total as math_check,
+                
+                -- BRAK SZCZEGÓŁÓW
+                'BRAK_MAPOWAŃ' as cc_details
+                
+            FROM lots l
+            ORDER BY l.ticker ASC, l.buy_date ASC, l.id ASC
+            """
+        
+        cursor.execute(query)
+        lots_raw = cursor.fetchall()
+        
+        if not lots_raw:
+            st.info("📝 Brak LOT-ów w portfelu")
+            conn.close()
+            return
+        
+        # =====================================
+        # OSTRZEŻENIE O JAKOŚCI DANYCH
+        # =====================================
+        
+        if not has_new_mappings and not has_old_mappings:
+            st.warning("⚠️ **UWAGA**: Brak tabel mapowań CC→LOT - dane mogą być nieakuratne!")
+            st.info("💡 System zgaduje które akcje są pod CC na podstawie statusu 'open' w options_cc")
+        elif has_old_mappings and not has_new_mappings:
+            st.info("ℹ️ Używam starych mapowań (options_cc_reservations)")
+        else:
+            st.success("✅ Używam nowych mapowań (cc_lot_mappings) - dane powinny być dokładne")
+        
+        # =====================================
+        # FILTRY (uproszczone)
+        # =====================================
+        
+        st.markdown("### 🔍 Filtry")
+        col_filter1, col_filter2, col_filter3 = st.columns(3)
+        
+        unique_tickers = sorted(list(set([row[1] for row in lots_raw])))
+        
+        with col_filter1:
+            ticker_filter = st.selectbox(
+                "Ticker:", 
+                options=['Wszystkie'] + unique_tickers,
+                key="lots_real_ticker_filter"
+            )
+        
+        with col_filter2:
+            status_filter = st.selectbox(
+                "Status:",
+                options=[
+                    'Wszystkie', 
+                    '🟢 Całkowicie dostępne',
+                    '🔒 Pod CC', 
+                    '💸 Sprzedane',
+                    '⚡ Mieszane',
+                    '❌ Błędne (matematyka)'
+                ],
+                key="lots_real_status_filter"
+            )
+        
+        with col_filter3:
+            show_details = st.checkbox("📋 Pokaż detale CC", key="show_cc_details")
+        
+        # =====================================
+        # PRZETWARZANIE I FILTROWANIE
+        # =====================================
+        
+        table_data = []
+        
+        for row in lots_raw:
+            # Rozpakuj dane
+            lot_id = row[0]
+            ticker = row[1]
+            qty_total = row[2]
+            qty_open = row[3]
+            buy_price_usd = row[4]
+            buy_date = row[5]
+            fx_rate = row[6]
+            cost_pln_total = row[7]
+            broker_fee = row[8] or 0
+            reg_fee = row[9] or 0
+            qty_under_cc = row[10] or 0
+            qty_sold = row[11] or 0
+            math_check_total = row[12] or qty_total
+            cc_details = row[13] or ""
+            
+            # FILTRY
+            if ticker_filter != 'Wszystkie' and ticker != ticker_filter:
                 continue
             
-            # Filtr status
-            if selected_status != "Wszystkie":
-                if selected_status == "Pełne" and qty_open != qty_total:
-                    continue
-                elif selected_status == "Częściowe" and (qty_open <= 0 or qty_open >= qty_total):
-                    continue
-                elif selected_status == "Wyprzedane" and qty_open > 0:
-                    continue
-            
-            # Filtr daty
-            if len(date_range) == 2:
-                lot_date = datetime.strptime(buy_date, '%Y-%m-%d').date() if isinstance(buy_date, str) else buy_date
-                if lot_date < date_range[0] or lot_date > date_range[1]:
-                    continue
-            
-            filtered_lots.append(lot)
-        
-        # SORTOWANIE (NOWE)
-        sort_field, sort_desc = sort_options[selected_sort]
-        
-        if sort_field == "buy_date":
-            filtered_lots.sort(key=lambda x: x[7], reverse=sort_desc)
-        elif sort_field == "ticker":
-            filtered_lots.sort(key=lambda x: x[1], reverse=sort_desc)
-        elif sort_field == "cost_pln":
-            filtered_lots.sort(key=lambda x: x[9], reverse=sort_desc)
-        elif sort_field == "quantity_open":
-            filtered_lots.sort(key=lambda x: x[3], reverse=sort_desc)
-        
-        # INFORMACJA O FILTRACH (NOWE)
-        if len(filtered_lots) != len(lots):
-            st.info(f"🔍 Pokazano **{len(filtered_lots)}** z **{len(lots)}** LOT-ów")
-        
-        if not filtered_lots:
-            st.warning("🔍 Brak LOT-ów pasujących do filtrów")
-            return
-        
-        # 🎯 RESZTA IDENTYCZNA - TYLKO ZMIEŃ lots NA filtered_lots
-        
-        # Przygotowanie danych do tabeli
-        table_data = []
-        total_cost_pln = 0
-        total_open_shares = 0
-        
-        for lot in filtered_lots:  # ← JEDYNA ZMIANA
-            lot_id, ticker, qty_total, qty_open, buy_price, broker_fee, reg_fee, buy_date, fx_rate, cost_pln, created_at = lot
-            
-            # Wyliczenia per LOT
-            cost_per_share_usd = buy_price + (broker_fee + reg_fee) / qty_total
-            current_cost_pln = (cost_per_share_usd * qty_open * fx_rate)
-            
-            # Status LOT-a - POPRAWIONY
-            reserved_shares = qty_total - qty_open
-            if qty_open == 0 and reserved_shares > 0:
-                status = "🔒 Pod CC"
-            elif qty_open == 0 and reserved_shares == 0:
-                status = "❌ Sprzedany"  # Teoretyczny przypadek - LOT powinien być usunięty
-            elif qty_open == qty_total:
-                status = "🟢 Dostępny"
+            # Określ status LOT-a
+            if qty_open == qty_total and qty_under_cc == 0 and qty_sold == 0:
+                lot_status = '🟢 Całkowicie dostępne'
+            elif qty_open == 0 and qty_under_cc > 0 and qty_sold == 0:
+                lot_status = '🔒 Pod CC'
+            elif qty_open == 0 and qty_under_cc == 0 and qty_sold > 0:
+                lot_status = '💸 Sprzedane'
+            elif qty_open > 0 or qty_under_cc > 0 or qty_sold > 0:
+                lot_status = '⚡ Mieszane'
             else:
-                status = f"🟡 Częściowy ({qty_open}/{qty_total})"
+                lot_status = '❓ Nieznane'
             
-            table_data.append({
+            # Sprawdź matematykę
+            calculated_total = qty_open + qty_under_cc + qty_sold
+            math_ok = calculated_total == qty_total
+            
+            if not math_ok:
+                lot_status = '❌ Błędne (matematyka)'
+            
+            # Filtr statusu
+            if status_filter != 'Wszystkie' and status_filter != lot_status:
+                continue
+            
+            # KALKULACJE
+            cost_per_share_pln = cost_pln_total / qty_total if qty_total > 0 else 0
+            
+            value_available = qty_open * cost_per_share_pln
+            value_under_cc = qty_under_cc * cost_per_share_pln
+            value_sold = qty_sold * cost_per_share_pln
+            
+            # DODAJ DO TABELI
+            row_data = {
                 'ID': lot_id,
                 'Ticker': ticker,
-                'Status': status,
-                'Qty Total': qty_total,
-                'Qty Available': qty_open,
-                'Under CC': reserved_shares,  # NOWA KOLUMNA
-                'Buy Price': f"${buy_price:.2f}",
-                'Cost/Share': f"${cost_per_share_usd:.2f}",
+                'Status': lot_status,
                 'Buy Date': buy_date,
+                
+                # GŁÓWNE ROZBICIE
+                'Total': qty_total,
+                '🟢 Available': qty_open,
+                '🔒 Under CC': qty_under_cc,
+                '💸 Sold': qty_sold,
+                
+                # SPRAWDZENIE
+                'Math': f"{'✅' if math_ok else '❌'} ({calculated_total})",
+                
+                # CENY
+                'Buy Price': f"${buy_price_usd:.2f}",
+                'Cost/Share PLN': f"{cost_per_share_pln:.2f}",
                 'FX Rate': f"{fx_rate:.4f}",
-                'Cost PLN': f"{current_cost_pln:.2f} zł",
-                'Original Cost': f"{cost_pln:.2f} zł"
-            })
+                
+                # WARTOŚCI
+                'Value Available': f"{value_available:,.0f} zł" if value_available > 0 else "-",
+                'Value Under CC': f"{value_under_cc:,.0f} zł" if value_under_cc > 0 else "-", 
+                'Value Sold': f"{value_sold:,.0f} zł" if value_sold > 0 else "-",
+                
+                # SZCZEGÓŁY CC (jeśli enabled)
+                'CC Details': cc_details if show_details else ""
+            }
             
-            total_cost_pln += current_cost_pln
-            total_open_shares += qty_open
+            table_data.append(row_data)
         
-        # Wyświetlenie tabeli - IDENTYCZNE
+        if not table_data:
+            st.warning("🔍 Brak LOT-ów pasujących do filtrów")
+            conn.close()
+            return
+        
+        # =====================================
+        # TABELA
+        # =====================================
+        
+        st.markdown("### 📊 LOT-y z prawdziwymi danymi")
+        
         df = pd.DataFrame(table_data)
+        
+        # Kolumny podstawowe
+        columns_config = {
+            'ID': st.column_config.NumberColumn('ID', width=50),
+            'Ticker': st.column_config.TextColumn('Ticker', width=60),
+            'Status': st.column_config.TextColumn('Status', width=140),
+            'Buy Date': st.column_config.DateColumn('Buy Date', width=100),
+            
+            'Total': st.column_config.NumberColumn('Total', width=70),
+            '🟢 Available': st.column_config.NumberColumn('Available', width=80),
+            '🔒 Under CC': st.column_config.NumberColumn('Under CC', width=80),
+            '💸 Sold': st.column_config.NumberColumn('Sold', width=70),
+            
+            'Math': st.column_config.TextColumn('Math ✓', width=80),
+            
+            'Buy Price': st.column_config.TextColumn('Buy $', width=80),
+            'Cost/Share PLN': st.column_config.TextColumn('Cost/szt', width=90),
+            'FX Rate': st.column_config.TextColumn('FX', width=70),
+            
+            'Value Available': st.column_config.TextColumn('Val. Available', width=110),
+            'Value Under CC': st.column_config.TextColumn('Val. Under CC', width=110),
+            'Value Sold': st.column_config.TextColumn('Val. Sold', width=100)
+        }
+        
+        # Dodaj kolumnę CC Details jeśli enabled
+        if show_details:
+            columns_config['CC Details'] = st.column_config.TextColumn('CC Details', width=200)
+        else:
+            # Usuń kolumnę z DataFrame
+            df = df.drop('CC Details', axis=1)
         
         st.dataframe(
             df,
             use_container_width=True,
-            height=400,
-            column_config={
-                'ID': st.column_config.NumberColumn('ID', width=60),
-                'Ticker': st.column_config.TextColumn('Ticker', width=80),
-                'Status': st.column_config.TextColumn('Status', width=120),
-                'Qty Total': st.column_config.NumberColumn('Total', width=80),
-                'Qty Available': st.column_config.NumberColumn('Available', width=90),
-                'Under CC': st.column_config.NumberColumn('Pod CC', width=80),  # NOWA KOLUMNA
-                'Buy Price': st.column_config.TextColumn('Buy Price', width=90),
-                'Cost/Share': st.column_config.TextColumn('Cost/Share', width=90),
-                'Buy Date': st.column_config.DateColumn('Buy Date', width=100),
-                'FX Rate': st.column_config.TextColumn('FX Rate', width=80),
-                'Cost PLN': st.column_config.TextColumn('Current Cost', width=120),
-                'Original Cost': st.column_config.TextColumn('Original Cost', width=120)
-            }
+            height=500,
+            column_config=columns_config
         )
         
-        # Podsumowanie portfela - IDENTYCZNE
-        col1, col2, col3, col4 = st.columns(4)
+        # =====================================
+        # PODSUMOWANIE
+        # =====================================
+        
+        st.markdown("### 📊 Podsumowanie")
+        
+        total_lots = len(table_data)
+        total_shares = sum(row['Total'] for row in table_data)
+        total_available = sum(row['🟢 Available'] for row in table_data)
+        total_under_cc = sum(row['🔒 Under CC'] for row in table_data)
+        total_sold = sum(row['💸 Sold'] for row in table_data)
+        
+        # Sprawdź czy matematyka się zgadza dla całego portfela
+        portfolio_math_ok = (total_available + total_under_cc + total_sold) == total_shares
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
-            st.metric("📊 Łączna ilość akcji", f"{total_open_shares:,}")
+            st.metric("📦 LOT-y", total_lots)
         
         with col2:
-            unique_tickers = len(set([lot[1] for lot in filtered_lots if lot[3] > 0]))  # ← filtered_lots
-            st.metric("🏷️ Unikalne tickery", unique_tickers)
+            st.metric("🟢 Dostępne", f"{total_available:,}")
         
         with col3:
-            st.metric("💰 Łączny koszt PLN", f"{total_cost_pln:,.2f} zł")
+            st.metric("🔒 Pod CC", f"{total_under_cc:,}")
         
         with col4:
-            total_lots = len([lot for lot in filtered_lots if lot[3] > 0])  # ← filtered_lots
-            st.metric("📦 Aktywne LOT-y", total_lots)
+            st.metric("💸 Sprzedane", f"{total_sold:,}")
         
-        # Dodatkowe statystyki per ticker - IDENTYCZNE
-        st.subheader("📈 Podsumowanie per ticker")
+        with col5:
+            math_icon = "✅" if portfolio_math_ok else "❌"
+            st.metric(f"{math_icon} Matematyka", f"{total_shares:,}")
         
-        ticker_stats = {}
-        for lot in filtered_lots:  # ← filtered_lots
-            ticker = lot[1]
-            qty_open = lot[3]
-            cost_per_share_usd = lot[4] + (lot[5] + lot[6]) / lot[2]
-            fx_rate = lot[8]
+        if not portfolio_math_ok:
+            st.error(f"❌ **BŁĄD MATEMATYCZNY**: {total_available} + {total_under_cc} + {total_sold} ≠ {total_shares}")
+        
+        # =====================================
+        # EXPORT CSV
+        # =====================================
+        
+        if st.button("📥 Eksport CSV", key="export_real_lots"):
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_data = df.to_csv(index=False)
             
-            if qty_open > 0:
-                if ticker not in ticker_stats:
-                    ticker_stats[ticker] = {
-                        'shares': 0,
-                        'cost_pln': 0,
-                        'lots_count': 0
-                    }
-                
-                ticker_stats[ticker]['shares'] += qty_open
-                ticker_stats[ticker]['cost_pln'] += cost_per_share_usd * qty_open * fx_rate
-                ticker_stats[ticker]['lots_count'] += 1
+            st.download_button(
+                "💾 Pobierz CSV",
+                csv_data,
+                f"lots_real_data_{timestamp}.csv",
+                "text/csv",
+                key="download_real_lots"
+            )
         
-        if ticker_stats:
-            ticker_summary = []
-            for ticker, stats in ticker_stats.items():
-                avg_cost_per_share_pln = stats['cost_pln'] / stats['shares']
-                ticker_summary.append({
-                    'Ticker': ticker,
-                    'Shares': f"{stats['shares']:,}",
-                    'LOT-y': stats['lots_count'],
-                    'Koszt PLN': f"{stats['cost_pln']:,.2f} zł",
-                    'Avg PLN/share': f"{avg_cost_per_share_pln:.2f} zł"
-                })
+        conn.close()
+        
+        # =====================================
+        # DODATKOWE INFO
+        # =====================================
+        
+        with st.expander("ℹ️ Informacje techniczne", expanded=False):
+            st.markdown(f"""
+            **Metoda danych:**
+            - {'✅' if has_new_mappings else '❌'} cc_lot_mappings (nowe mapowania)
+            - {'✅' if has_old_mappings else '❌'} options_cc_reservations (stare mapowania)
+            - {'✅' if has_new_mappings or has_old_mappings else '⚠️'} Dokładność danych
             
-            ticker_df = pd.DataFrame(ticker_summary)
-            st.dataframe(ticker_df, use_container_width=True)
+            **Legenda statusów:**
+            - 🟢 **Całkowicie dostępne**: Wszystkie akcje z LOT-a dostępne do sprzedaży
+            - 🔒 **Pod CC**: Wszystkie akcje zarezerwowane pod Covered Calls  
+            - 💸 **Sprzedane**: Wszystkie akcje już sprzedane
+            - ⚡ **Mieszane**: Część dostępna, część pod CC, część sprzedana
+            - ❌ **Błędne**: Matematyka się nie zgadza (Available + CC + Sold ≠ Total)
+            
+            **Sprawdzenie matematyczne:**
+            - ✅ = Total = Available + Under CC + Sold
+            - ❌ = Matematyka się nie zgadza - problem z danymi!
+            """)
         
-        # PUNKT 49A: EKSPORT CSV
-        add_lots_csv_export(filtered_lots)
-        
-    
     except Exception as e:
-        st.error(f"❌ Błąd pobierania LOT-ów: {e}")
+        st.error(f"❌ Błąd ładowania tabeli LOT-ów: {e}")
         if conn:
             conn.close()
+
 
 def show_sales_table():
     """
