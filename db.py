@@ -644,51 +644,185 @@ def get_lot(lot_id):
     
     return None
 
-def get_lots_by_ticker(ticker, only_open=False):
-    """Pobranie LOT-ów dla określonego tickera (w kolejności FIFO)"""
+def get_lots_by_ticker(ticker, only_open=False, sell_date=None):
+    """
+    🔧 NAPRAWIONO: Pobierz LOT-y z walidacją temporalną
+    
+    NOWE: Dodano parametr sell_date dla walidacji czasowej
+    - Tylko LOT-y kupione PRZED datą sprzedaży
+    - Zapobiega sprzedaży akcji z przyszłości
+    
+    Args:
+        ticker: str - symbol akcji
+        only_open: bool - tylko z quantity_open > 0
+        sell_date: str/date - data sprzedaży (dla walidacji temporalnej)
+    
+    Returns:
+        List[Dict]: Posortowane LOT-y FIFO z walidacją czasową
+    """
     conn = get_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            
-            query = """
-                SELECT id, ticker, quantity_total, quantity_open, buy_price_usd,
-                       broker_fee_usd, reg_fee_usd, buy_date, fx_rate, cost_pln,
-                       created_at, updated_at
-                FROM lots 
-                WHERE ticker = ?
-            """
-            
-            if only_open:
-                query += " AND quantity_open > 0"
-            
-            query += " ORDER BY buy_date, id"
-            
-            cursor.execute(query, (ticker.upper(),))
-            rows = cursor.fetchall()
-            conn.close()
-            
-            return [{
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Buduj query dynamicznie
+        query = """
+            SELECT id, ticker, quantity_total, quantity_open, buy_price_usd,
+                   broker_fee_usd, reg_fee_usd, buy_date, fx_rate, cost_pln,
+                   created_at, updated_at
+            FROM lots 
+            WHERE ticker = ?
+        """
+        params = [ticker.upper()]
+        
+        # NOWA WALIDACJA: tylko LOT-y kupione przed datą sprzedaży
+        if sell_date is not None:
+            query += " AND buy_date <= ?"
+            # Konwertuj datę jeśli potrzeba
+            if hasattr(sell_date, 'strftime'):
+                sell_date_str = sell_date.strftime('%Y-%m-%d')
+            else:
+                sell_date_str = str(sell_date)
+            params.append(sell_date_str)
+        
+        # Filtr only_open
+        if only_open:
+            query += " AND quantity_open > 0"
+        
+        # FIFO sorting (data, potem ID)
+        query += " ORDER BY buy_date ASC, id ASC"
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+        
+        # Konwersja na słowniki
+        lots = []
+        for row in rows:
+            lot = {
                 'id': row[0],
                 'ticker': row[1],
                 'quantity_total': row[2],
                 'quantity_open': row[3],
                 'buy_price_usd': float(row[4]),
-                'broker_fee_usd': float(row[5]),
-                'reg_fee_usd': float(row[6]),
+                'broker_fee_usd': float(row[5]) if row[5] else 0.0,
+                'reg_fee_usd': float(row[6]) if row[6] else 0.0,
                 'buy_date': row[7],
                 'fx_rate': float(row[8]),
                 'cost_pln': float(row[9]),
                 'created_at': row[10],
                 'updated_at': row[11]
-            } for row in rows]
-            
-        except Exception as e:
-            st.error(f"Błąd pobierania LOT-ów dla {ticker}: {e}")
-            if conn:
-                conn.close()
+            }
+            lots.append(lot)
+        
+        return lots
+        
+    except Exception as e:
+        st.error(f"Błąd pobierania LOT-ów z walidacją temporalną: {e}")
+        if conn:
+            conn.close()
+        return []
+
+def validate_sell_date_against_lots(ticker, sell_date, quantity_needed):
+    """
+    🔧 Walidacja temporalna: sprawdź czy można sprzedać na daną datę
     
-    return []
+    Args:
+        ticker: str - symbol akcji
+        sell_date: str/date - data sprzedaży
+        quantity_needed: int - ile chcemy sprzedać
+    
+    Returns:
+        dict: {
+            'valid': bool,
+            'available_quantity': int,
+            'violating_lots': List[Dict],  # LOT-y z przyszłości
+            'message': str
+        }
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'valid': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        ticker_upper = ticker.upper()
+        
+        # Konwertuj datę
+        if hasattr(sell_date, 'strftime'):
+            sell_date_str = sell_date.strftime('%Y-%m-%d')
+        else:
+            sell_date_str = str(sell_date)
+        
+        # Pobierz wszystkie LOT-y
+        cursor.execute("""
+            SELECT id, buy_date, quantity_open, quantity_total
+            FROM lots 
+            WHERE ticker = ? AND quantity_open > 0
+            ORDER BY buy_date ASC, id ASC
+        """, (ticker_upper,))
+        
+        all_lots = cursor.fetchall()
+        conn.close()
+        
+        if not all_lots:
+            return {
+                'valid': False,
+                'available_quantity': 0,
+                'violating_lots': [],
+                'message': f'Brak LOT-ów dla {ticker}'
+            }
+        
+        # Analiza temporalna
+        valid_lots = []  # LOT-y przed datą sprzedaży
+        violating_lots = []  # LOT-y z przyszłości
+        
+        for lot in all_lots:
+            lot_id, buy_date, qty_open, qty_total = lot
+            
+            if buy_date <= sell_date_str:
+                valid_lots.append({
+                    'id': lot_id,
+                    'buy_date': buy_date,
+                    'quantity_open': qty_open,
+                    'quantity_total': qty_total
+                })
+            else:
+                violating_lots.append({
+                    'id': lot_id,
+                    'buy_date': buy_date,
+                    'quantity_open': qty_open,
+                    'quantity_total': qty_total
+                })
+        
+        # Ile dostępne przed datą sprzedaży
+        available_quantity = sum(lot['quantity_open'] for lot in valid_lots)
+        
+        # Walidacja
+        if quantity_needed <= available_quantity:
+            return {
+                'valid': True,
+                'available_quantity': available_quantity,
+                'violating_lots': violating_lots,
+                'message': f'OK: {available_quantity} dostępne przed {sell_date_str}'
+            }
+        else:
+            return {
+                'valid': False,
+                'available_quantity': available_quantity,
+                'violating_lots': violating_lots,
+                'message': f'BŁĄD: potrzeba {quantity_needed}, dostępne {available_quantity} przed {sell_date_str}'
+            }
+        
+    except Exception as e:
+        return {
+            'valid': False,
+            'available_quantity': 0,
+            'violating_lots': [],
+            'message': f'Błąd walidacji: {e}'
+        }
 
 def update_lot_quantity(lot_id, new_quantity_open):
     """Aktualizacja quantity_open LOT-a"""
@@ -991,12 +1125,12 @@ def get_database_summary():
 
 def check_cc_coverage_with_chronology(ticker, contracts, cc_sell_date):
     """
-    NAPRAWIONA: Sprawdza pokrycie CC na konkretną datę z poprawnymi kolumnami
+    🔧 NAPRAWIONA: Sprawdza pokrycie CC na konkretną datę historyczną
     
-    POPRAWKI:
-    1. sts.qty_from_lot zamiast sts.quantity_sold
-    2. Dodano AND status = 'open' dla aktywnych CC
-    3. Zwracane shares_needed nawet przy błędzie
+    GŁÓWNE NAPRAWKI:
+    1. Sprawdza akcje POSIADANE NA DATĘ CC (nie obecny stan!)
+    2. Uwzględnia tylko transakcje PRZED datą CC
+    3. Poprawne obliczanie dostępności historycznej
     """
     try:
         conn = get_connection()
@@ -1012,109 +1146,160 @@ def check_cc_coverage_with_chronology(ticker, contracts, cc_sell_date):
         ticker_upper = ticker.upper()
         shares_needed = contracts * 100
         
-        # Data jako string
+        # Konwertuj datę CC na string
         if hasattr(cc_sell_date, 'strftime'):
             cc_date_str = cc_sell_date.strftime('%Y-%m-%d')
         else:
             cc_date_str = str(cc_sell_date)
         
-        # 1. ŁĄCZNA ILOŚĆ AKCJI (wszystkie LOT-y tickera)
+        # 🔧 NAPRAWKA 1: AKCJE POSIADANE NA DATĘ CC
+        # Pobierz tylko LOT-y kupione PRZED lub W DNIU sprzedaży CC
         cursor.execute("""
-            SELECT COALESCE(SUM(quantity_total), 0) as total_shares
+            SELECT COALESCE(SUM(quantity_total), 0) as owned_on_cc_date
             FROM lots 
-            WHERE ticker = ?
-        """, (ticker_upper,))
+            WHERE ticker = ? AND buy_date <= ?
+        """, (ticker_upper, cc_date_str))
         
-        total_shares = cursor.fetchone()[0] or 0
+        owned_on_cc_date = cursor.fetchone()[0] or 0
         
-        if total_shares == 0:
+        if owned_on_cc_date == 0:
             conn.close()
             return {
                 'can_cover': False,
-                'message': f'Brak akcji {ticker} w portfelu',
+                'message': f'Brak akcji {ticker} posiadanych na {cc_date_str}',
                 'shares_needed': shares_needed,
                 'shares_available': 0
             }
         
-        # 2. SPRZEDANE AKCJE PRZED DATĄ CC (poprawiona kolumna)
+        # 🔧 NAPRAWKA 2: SPRZEDANE PRZED DATĄ CC
+        # Tylko sprzedaże PRZED datą CC (nie w dniu!)
         cursor.execute("""
-            SELECT COALESCE(SUM(sts.qty_from_lot), 0) as sold_shares
+            SELECT COALESCE(SUM(sts.qty_from_lot), 0) as sold_before_cc
             FROM stock_trades st
             JOIN stock_trade_splits sts ON st.id = sts.trade_id
             JOIN lots l ON sts.lot_id = l.id
             WHERE l.ticker = ? AND st.sell_date < ?
         """, (ticker_upper, cc_date_str))
         
-        sold_before = cursor.fetchone()[0] or 0
+        sold_before_cc = cursor.fetchone()[0] or 0
         
-        # 3. CC AKTYWNE PRZED/NA DATĘ (tylko status = 'open')
+        # 🔧 NAPRAWKA 3: CC OTWARTE PRZED DATĄ CC
+        # Tylko CC otwarte PRZED tym CC (nie w tym samym dniu!)
         cursor.execute("""
-            SELECT COALESCE(SUM(contracts * 100), 0) as reserved_shares
+            SELECT COALESCE(SUM(contracts * 100), 0) as cc_reserved_before
             FROM options_cc 
             WHERE ticker = ? 
             AND status = 'open'
-            AND open_date <= ?
-            AND (close_date IS NULL OR close_date > ?)
-        """, (ticker_upper, cc_date_str, cc_date_str))
+            AND open_date < ?
+        """, (ticker_upper, cc_date_str))
         
         cc_reserved_before = cursor.fetchone()[0] or 0
         
-        # 4. DOSTĘPNE AKCJE NA DATĘ CC
-        available_on_cc_date = total_shares - sold_before - cc_reserved_before
+        # 🔧 NAPRAWKA 4: DOSTĘPNE AKCJE NA DATĘ CC
+        available_on_cc_date = owned_on_cc_date - sold_before_cc - cc_reserved_before
         can_cover = available_on_cc_date >= shares_needed
         
-        # 5. PODGLĄD FIFO
+        # 5. FIFO PREVIEW dla pokrycia
         fifo_preview = []
         if can_cover:
+            # Pobierz LOT-y dostępne na datę CC
             cursor.execute("""
-                SELECT id, quantity_total, buy_date, buy_price_usd, fx_rate, cost_pln
-                FROM lots 
-                WHERE ticker = ?
-                ORDER BY buy_date ASC, id ASC
-            """, (ticker_upper,))
+                SELECT l.id, l.quantity_total, l.buy_date, l.buy_price_usd, 
+                       l.fx_rate, l.cost_pln,
+                       COALESCE(sold.qty_sold, 0) as qty_sold_before,
+                       COALESCE(reserved.qty_reserved, 0) as qty_reserved_before
+                FROM lots l
+                LEFT JOIN (
+                    SELECT l2.id as lot_id, SUM(sts.qty_from_lot) as qty_sold
+                    FROM lots l2
+                    JOIN stock_trade_splits sts ON l2.id = sts.lot_id
+                    JOIN stock_trades st ON sts.trade_id = st.id
+                    WHERE l2.ticker = ? AND st.sell_date < ?
+                    GROUP BY l2.id
+                ) sold ON l.id = sold.lot_id
+                LEFT JOIN (
+                    SELECT l3.id as lot_id, 
+                           SUM(cc.contracts * 100.0 / lots_count.total_lots) as qty_reserved
+                    FROM lots l3
+                    JOIN options_cc cc ON l3.ticker = cc.ticker
+                    JOIN (
+                        SELECT ticker, COUNT(*) as total_lots
+                        FROM lots 
+                        WHERE ticker = ?
+                        GROUP BY ticker
+                    ) lots_count ON l3.ticker = lots_count.ticker
+                    WHERE cc.status = 'open' AND cc.open_date < ?
+                    GROUP BY l3.id
+                ) reserved ON l.id = reserved.lot_id
+                WHERE l.ticker = ? AND l.buy_date <= ?
+                ORDER BY l.buy_date ASC, l.id ASC
+            """, (ticker_upper, cc_date_str, ticker_upper, cc_date_str, ticker_upper, cc_date_str))
             
-            lots_fifo = cursor.fetchall()
+            lots_data = cursor.fetchall()
             remaining_needed = shares_needed
             
-            for lot_id, qty_total, buy_date, buy_price_usd, fx_rate, cost_pln in lots_fifo:
+            for lot_data in lots_data:
                 if remaining_needed <= 0:
                     break
                 
-                qty_to_reserve = min(remaining_needed, qty_total)
-                fifo_preview.append({
-                    'lot_id': lot_id,
-                    'buy_date': str(buy_date),
-                    'buy_price_usd': float(buy_price_usd),
-                    'fx_rate': float(fx_rate),  # <-- DODANE
-                    'cost_pln': float(cost_pln),  # <-- DODANE  
-                    'qty_available': qty_total,
-                    'qty_to_reserve': qty_to_reserve,
-                    'qty_remaining_after': qty_total - qty_to_reserve
-                })
+                lot_id, qty_total, buy_date, buy_price_usd, fx_rate, cost_pln, qty_sold, qty_reserved = lot_data
                 
-                remaining_needed -= qty_to_reserve
+                # Dostępne w tym LOT-cie na datę CC
+                qty_available_in_lot = qty_total - (qty_sold or 0) - (qty_reserved or 0)
+                
+                if qty_available_in_lot > 0:
+                    qty_to_reserve = min(remaining_needed, qty_available_in_lot)
+                    
+                    fifo_preview.append({
+                        'lot_id': lot_id,
+                        'buy_date': str(buy_date),
+                        'buy_price_usd': float(buy_price_usd),
+                        'fx_rate': float(fx_rate),
+                        'cost_pln': float(cost_pln),
+                        'qty_total': qty_total,
+                        'qty_available_on_date': qty_available_in_lot,
+                        'qty_to_reserve': qty_to_reserve,
+                        'qty_remaining_after': qty_available_in_lot - qty_to_reserve
+                    })
+                    
+                    remaining_needed -= qty_to_reserve
         
         conn.close()
+        
+        # 🎯 DEBUG INFO
+        debug_info = {
+            'cc_date': cc_date_str,
+            'owned_on_date': owned_on_cc_date,
+            'sold_before': sold_before_cc,
+            'cc_reserved_before': cc_reserved_before,
+            'available_calculated': available_on_cc_date
+        }
         
         return {
             'can_cover': can_cover,
             'shares_needed': shares_needed,
             'shares_available': available_on_cc_date,
-            'total_shares': total_shares,
-            'sold_before': sold_before,
+            'owned_on_date': owned_on_cc_date,
+            'sold_before': sold_before_cc,
             'cc_reserved_before': cc_reserved_before,
             'fifo_preview': fifo_preview,
-            'message': 'OK' if can_cover else f'Brakuje {shares_needed - available_on_cc_date} akcji na {cc_date_str}'
+            'debug_info': debug_info,
+            'message': 'OK' if can_cover else f'Brakuje {shares_needed - available_on_cc_date} akcji na {cc_date_str} (miało {owned_on_cc_date}, sprzedano {sold_before_cc}, zarezerwowano {cc_reserved_before})'
         }
         
     except Exception as e:
         print(f"❌ Błąd chronologii CC: {e}")
+        import traceback
+        traceback.print_exc()
+        
         return {
             'can_cover': False, 
             'message': f'Błąd sprawdzania chronologii: {str(e)}',
             'shares_needed': contracts * 100,
             'shares_available': 0
         }
+
+
 
 
 # BONUS: Uproszczona wersja jeśli nadal są problemy
@@ -5226,6 +5411,482 @@ def get_tax_vs_operational_fifo_comparison(ticker: str, quantity: int) -> Dict:
         },
         'recommendation': 'USE_TAX_FIFO_FOR_PIT38' if tax_lots_used != operational_lots_used else 'BOTH_SAME'
     }
+
+# PUNKT 72: Migracja tabeli options_cc + chain_id
+# Dodaj te funkcje do db.py
+
+def migrate_options_cc_add_chain_id():
+    """
+    🔗 PUNKT 72: Dodanie kolumny chain_id do tabeli options_cc
+    
+    Dodaje foreign key do cc_chains dla łączenia opcji w łańcuchy.
+    Bezpieczna migracja z rollback przy błędzie.
+    
+    Returns:
+        dict: {'success': bool, 'message': str}
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # Sprawdź czy kolumna już istnieje
+        cursor.execute("PRAGMA table_info(options_cc)")
+        columns = cursor.fetchall()
+        existing_columns = [col[1] for col in columns]  # col[1] = nazwa kolumny
+        
+        if 'chain_id' in existing_columns:
+            conn.close()
+            return {'success': True, 'message': 'Kolumna chain_id już istnieje'}
+        
+        # Dodaj kolumnę chain_id
+        cursor.execute("""
+            ALTER TABLE options_cc 
+            ADD COLUMN chain_id INTEGER NULL 
+            REFERENCES cc_chains(id) ON DELETE SET NULL
+        """)
+        
+        # Dodaj indeks dla wydajności
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_options_cc_chain_id 
+            ON options_cc(chain_id)
+        """)
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True, 
+            'message': '✅ Kolumna chain_id dodana do options_cc'
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.rollback() 
+            conn.close()
+        return {
+            'success': False, 
+            'message': f'❌ Błąd migracji: {str(e)}'
+        }
+
+def check_cc_chains_migration_status():
+    """
+    🔍 PUNKT 72.1: Sprawdza status migracji CC Chains
+    
+    Returns:
+        dict: Status migracji i statystyki
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'error': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        
+        # Sprawdź tabele
+        tables_status = {}
+        
+        # 1. Czy tabela cc_chains istnieje?
+        cursor.execute("""
+            SELECT COUNT(*) FROM sqlite_master 
+            WHERE type='table' AND name='cc_chains'
+        """)
+        tables_status['cc_chains_exists'] = cursor.fetchone()[0] > 0
+        
+        if tables_status['cc_chains_exists']:
+            cursor.execute("SELECT COUNT(*) FROM cc_chains")
+            tables_status['cc_chains_count'] = cursor.fetchone()[0]
+        
+        # 2. Czy options_cc ma kolumnę chain_id?
+        cursor.execute("PRAGMA table_info(options_cc)")
+        columns = cursor.fetchall()
+        existing_columns = [col[1] for col in columns]
+        tables_status['chain_id_exists'] = 'chain_id' in existing_columns
+        
+        # 3. Ile CC ma przypisane chains?
+        if tables_status['chain_id_exists']:
+            cursor.execute("SELECT COUNT(*) FROM options_cc WHERE chain_id IS NOT NULL")
+            tables_status['cc_with_chains'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM options_cc WHERE chain_id IS NULL")
+            tables_status['cc_without_chains'] = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            'success': True,
+            'tables_status': tables_status
+        }
+        
+    except Exception as e:
+        if conn:
+            conn.close()
+        return {
+            'success': False, 
+            'error': f'Błąd sprawdzania: {str(e)}'
+        }
+
+def run_cc_chains_migration():
+    """
+    🚀 PUNKT 72.2: Kompletna migracja CC Chains
+    
+    1. Tworzy tabelę cc_chains (jeśli nie istnieje)
+    2. Dodaje chain_id do options_cc  
+    3. Sprawdza poprawność migracji
+    
+    Returns:
+        dict: Pełny raport migracji
+    """
+    migration_report = {
+        'steps_completed': [],
+        'errors': [],
+        'success': True
+    }
+    
+    try:
+        # KROK 1: Utwórz tabelę cc_chains
+        from structure import create_cc_chains_table
+        
+        conn = get_connection()
+        if not conn:
+            migration_report['errors'].append('Brak połączenia z bazą')
+            migration_report['success'] = False
+            return migration_report
+        
+        if create_cc_chains_table(conn):
+            migration_report['steps_completed'].append('✅ Tabela cc_chains utworzona')
+        else:
+            migration_report['errors'].append('❌ Błąd tworzenia cc_chains')
+            migration_report['success'] = False
+        
+        conn.close()
+        
+        # KROK 2: Dodaj chain_id do options_cc
+        chain_id_result = migrate_options_cc_add_chain_id()
+        if chain_id_result['success']:
+            migration_report['steps_completed'].append(f"✅ {chain_id_result['message']}")
+        else:
+            migration_report['errors'].append(f"❌ {chain_id_result['message']}")
+            migration_report['success'] = False
+        
+        # KROK 3: Sprawdź status
+        status_check = check_cc_chains_migration_status()
+        if status_check['success']:
+            migration_report['final_status'] = status_check['tables_status']
+            migration_report['steps_completed'].append('✅ Weryfikacja migracji zakończona')
+        else:
+            migration_report['errors'].append(f"❌ {status_check['error']}")
+        
+        return migration_report
+        
+    except Exception as e:
+        migration_report['errors'].append(f'❌ Błąd ogólny migracji: {str(e)}')
+        migration_report['success'] = False
+        return migration_report
+
+# PUNKT 74: Uproszczony algorytm auto-detection dla CC Chains
+# Dodaj te funkcje do db.py
+
+def auto_detect_cc_chains():
+    """
+    🤖 PUNKT 74: NAPRAWIONY algorytm auto-detection CC Chains
+    
+    PROBLEM: Query nie znajdował LOT-ów bo był zbyt skomplikowany
+    ROZWIĄZANIE: Prostszy query + debug output
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia z bazą'}
+        
+        cursor = conn.cursor()
+        chains_created = 0
+        cc_assigned = 0
+        
+        # DEBUG: Sprawdź co mamy w bazie
+        cursor.execute("SELECT COUNT(*) FROM options_cc WHERE chain_id IS NULL")
+        cc_without_chains = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM cc_lot_mappings")
+        total_mappings = cursor.fetchone()[0]
+        
+        if cc_without_chains == 0:
+            conn.close()
+            return {
+                'success': True, 
+                'chains_created': 0,
+                'cc_assigned': 0,
+                'message': f'✅ Wszystkie {total_mappings} CC już mają chains'
+            }
+        
+        # NOWY PROSTSZY QUERY: Znajdź LOT-y z CC bez chains
+        cursor.execute("""
+            SELECT m.lot_id, l.ticker, l.buy_date, COUNT(m.cc_id) as cc_count
+            FROM cc_lot_mappings m
+            JOIN lots l ON l.id = m.lot_id  
+            JOIN options_cc cc ON cc.id = m.cc_id
+            WHERE cc.chain_id IS NULL
+            GROUP BY m.lot_id, l.ticker, l.buy_date
+            ORDER BY l.ticker, l.buy_date
+        """)
+        
+        lots_with_unmapped_cc = cursor.fetchall()
+        
+        if not lots_with_unmapped_cc:
+            conn.close()
+            return {
+                'success': True, 
+                'chains_created': 0,
+                'cc_assigned': 0,
+                'message': f'🔍 Debug: {cc_without_chains} CC bez chains, ale 0 LOT-ów z mapowaniami. Sprawdź mapowania!'
+            }
+        
+        # KROK 2: Dla każdego LOT-u utwórz chain (jeśli nie istnieje)
+        for lot_id, ticker, buy_date, cc_count in lots_with_unmapped_cc:
+            
+            # Sprawdź czy LOT już ma chain
+            cursor.execute("SELECT id FROM cc_chains WHERE lot_id = ?", (lot_id,))
+            existing_chain = cursor.fetchone()
+            
+            if existing_chain:
+                chain_id = existing_chain[0]
+                # Chain istnieje, tylko przypisz CC
+            else:
+                # Utwórz nowy chain dla tego LOT-u
+                cursor.execute("""
+                    SELECT MIN(cc.open_date) as start_date
+                    FROM options_cc cc
+                    JOIN cc_lot_mappings m ON cc.id = m.cc_id
+                    WHERE m.lot_id = ?
+                """, (lot_id,))
+                
+                start_date_result = cursor.fetchone()
+                start_date = start_date_result[0] if start_date_result else buy_date
+                
+                # Wygeneruj chain_name
+                chain_name = f"{ticker} Chain (LOT #{lot_id})"
+                
+                cursor.execute("""
+                    INSERT INTO cc_chains (
+                        lot_id, ticker, chain_name, start_date, status
+                    ) VALUES (?, ?, ?, ?, 'active')
+                """, (lot_id, ticker, chain_name, start_date))
+                
+                chain_id = cursor.lastrowid
+                chains_created += 1
+            
+            # KROK 3: Przypisz wszystkie CC z tego LOT-u do chain
+            cursor.execute("""
+                SELECT cc.id 
+                FROM options_cc cc
+                JOIN cc_lot_mappings m ON cc.id = m.cc_id
+                WHERE m.lot_id = ? AND cc.chain_id IS NULL
+            """, (lot_id,))
+            
+            cc_to_assign = cursor.fetchall()
+            
+            for (cc_id_to_assign,) in cc_to_assign:
+                cursor.execute("""
+                    UPDATE options_cc 
+                    SET chain_id = ?
+                    WHERE id = ?
+                """, (chain_id, cc_id_to_assign))
+                cc_assigned += 1
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'success': True,
+            'chains_created': chains_created,
+            'cc_assigned': cc_assigned,
+            'message': f'✅ Utworzono {chains_created} chains, przypisano {cc_assigned} CC'
+        }
+        
+    except Exception as e:
+        if 'conn' in locals():
+            conn.rollback()
+            conn.close()
+        
+        # ZWRÓĆ SZCZEGÓŁOWY BŁĄD
+        import traceback
+        error_details = traceback.format_exc()
+        
+        return {
+            'success': False, 
+            'message': f'❌ Błąd auto-detection: {str(e)}',
+            'error_details': error_details
+        }
+
+def get_cc_chains_summary():
+    """
+    📊 PUNKT 74.1: Pobranie podsumowania wszystkich CC Chains
+    
+    Returns:
+        list: Lista chains z podstawowymi statystykami
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        
+        # Pobierz chains z podstawowymi stats
+        cursor.execute("""
+            SELECT 
+                ch.id,
+                ch.lot_id,
+                ch.ticker, 
+                ch.chain_name,
+                ch.start_date,
+                ch.end_date,
+                ch.status,
+                l.buy_date,
+                l.quantity_total,
+                l.quantity_open,
+                COUNT(cc.id) as cc_count,
+                SUM(CASE WHEN cc.status = 'open' THEN 1 ELSE 0 END) as open_cc_count,
+                COALESCE(SUM(cc.pl_pln), 0) as total_pl_pln,
+                COALESCE(SUM(cc.premium_sell_pln), 0) as total_premium_pln
+            FROM cc_chains ch
+            JOIN lots l ON l.id = ch.lot_id
+            LEFT JOIN options_cc cc ON cc.chain_id = ch.id
+            GROUP BY ch.id
+            ORDER BY ch.ticker, l.buy_date DESC
+        """)
+        
+        chains_raw = cursor.fetchall()
+        conn.close()
+        
+        # Konwertuj na dict
+        chains = []
+        for row in chains_raw:
+            chains.append({
+                'id': row[0],
+                'lot_id': row[1], 
+                'ticker': row[2],
+                'chain_name': row[3],
+                'start_date': row[4],
+                'end_date': row[5],
+                'status': row[6],
+                'lot_buy_date': row[7],
+                'lot_total': row[8],
+                'lot_open': row[9], 
+                'cc_count': row[10],
+                'open_cc_count': row[11],
+                'total_pl_pln': row[12],
+                'total_premium_pln': row[13]
+            })
+        
+        return chains
+        
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd pobierania chains: {e}")
+        return []
+
+def update_chain_statistics(chain_id):
+    """
+    📊 PUNKT 74.2: Aktualizuje statystyki chain na podstawie przypisanych CC
+    
+    Args:
+        chain_id: ID chain do aktualizacji
+        
+    Returns:
+        dict: Status operacji
+    """
+    try:
+        conn = get_connection()
+        if not conn:
+            return {'success': False, 'message': 'Brak połączenia'}
+        
+        cursor = conn.cursor()
+        
+        # Pobierz statystyki CC w tym chain
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_contracts,
+                COALESCE(SUM(premium_sell_pln), 0) as total_premium,
+                COALESCE(SUM(pl_pln), 0) as total_pl,
+                AVG(JULIANDAY(COALESCE(close_date, expiry_date)) - JULIANDAY(open_date)) as avg_duration,
+                COUNT(CASE WHEN pl_pln > 0 THEN 1 END) * 100.0 / COUNT(*) as success_rate,
+                MAX(COALESCE(close_date, expiry_date)) as last_activity_date
+            FROM options_cc
+            WHERE chain_id = ? AND status IN ('bought_back', 'expired', 'open')
+        """, (chain_id,))
+        
+        stats = cursor.fetchone()
+        
+        if stats:
+            total_contracts, total_premium, total_pl, avg_duration, success_rate, last_activity = stats
+            
+            # Określ end_date i status chain
+            cursor.execute("""
+                SELECT COUNT(*) FROM options_cc 
+                WHERE chain_id = ? AND status = 'open'
+            """, (chain_id,))
+            
+            open_cc_count = cursor.fetchone()[0]
+            
+            # Chain status
+            chain_status = 'active' if open_cc_count > 0 else 'closed'
+            end_date = None if open_cc_count > 0 else last_activity
+            
+            # Kalkulacja annualized return (uproszczona)
+            if avg_duration and avg_duration > 0 and total_pl > 0:
+                annualized_return = (total_pl / total_premium) * (365 / avg_duration) * 100
+            else:
+                annualized_return = 0
+            
+            # Update chain
+            cursor.execute("""
+                UPDATE cc_chains SET
+                    total_contracts = ?,
+                    total_premium_usd = ?,
+                    total_pl_pln = ?,
+                    avg_duration_days = ?,
+                    success_rate = ?,
+                    annualized_return = ?,
+                    end_date = ?,
+                    status = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (
+                total_contracts, 
+                total_premium / (stats[0] or 1),  # avg premium per contract 
+                total_pl,
+                avg_duration or 0,
+                success_rate or 0,
+                annualized_return,
+                end_date,
+                chain_status,
+                chain_id
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            return {
+                'success': True,
+                'message': f'✅ Statystyki chain #{chain_id} zaktualizowane',
+                'stats': {
+                    'total_pl': total_pl,
+                    'cc_count': total_contracts,
+                    'status': chain_status
+                }
+            }
+        
+        conn.close()
+        return {'success': False, 'message': 'Brak danych dla chain'}
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        return {'success': False, 'message': f'Błąd aktualizacji: {str(e)}'}
 
 # Test na końcu pliku (opcjonalny)
 if __name__ == "__main__":

@@ -179,42 +179,72 @@ def show_sell_cc_tab():
                 help="Wybierz akcje do pokrycia covered call"
             )
             
-            # Wyciągnij ticker z opcji
-            selected_ticker = selected_ticker_option.split(' ')[0] if selected_ticker_option else None
-            max_shares = next((shares for ticker, shares in available_tickers if ticker == selected_ticker), 0)
-            max_contracts = max_shares // 100
+            col_dates1, col_dates2 = st.columns(2)
+
+            with col_dates1:
+                sell_date = st.date_input(
+                    "Data sprzedaży:",
+                    value=date.today() - timedelta(days=30)
+                )
+
+            with col_dates2:
+                expiry_date = st.date_input(
+                    "Data expiry:", 
+                    value=date.today() + timedelta(days=30)
+                )
             
+                
+            
+            # Wyciągnij ticker z opcji
+            # I ZAMIEŃ je NA:
+            selected_ticker = selected_ticker_option.split(' ')[0] if selected_ticker_option else None
+
+            # 🔧 NAPRAWKA: Sprawdź dostępność na datę CC
+            if selected_ticker and sell_date:
+                # Używaj naprawionej funkcji chronologii
+                test_coverage = db.check_cc_coverage_with_chronology(selected_ticker, 10, sell_date)
+                max_contracts_on_date = test_coverage.get('shares_available', 0) // 100
+                
+                if max_contracts_on_date > 0:
+                    st.success(f"✅ Na {sell_date}: dostępne {test_coverage.get('shares_available')} akcji = max {max_contracts_on_date} kontraktów")
+                else:
+                    st.error(f"❌ Na {sell_date}: brak dostępnych akcji {selected_ticker}")
+                    debug_info = test_coverage.get('debug_info', {})
+                    st.error(f"   Posiadane: {debug_info.get('owned_on_date', 0)}")
+                    st.error(f"   Sprzedane przed: {debug_info.get('sold_before', 0)}")
+                    st.error(f"   Zarezerwowane przed: {debug_info.get('cc_reserved_before', 0)}")
+            else:
+                max_contracts_on_date = 1
+
             col_form1, col_form2 = st.columns(2)
             
             with col_form1:
-                # Liczba kontraktów
+                # 🔧 NAPRAWIONA walidacja kontraktów
                 contracts = st.number_input(
                     "Liczba kontraktów CC:",
                     min_value=1,
-                    max_value=max(1, max_contracts),
-                    value=1,
-                    help=f"Maksymalnie {max_contracts} kontraktów dla {selected_ticker}"
+                    max_value=max(1, max_contracts_on_date) if selected_ticker and sell_date else 10,
+                    value=min(3, max_contracts_on_date) if max_contracts_on_date >= 3 else 1,
+                    help=f"Na {sell_date}: maksymalnie {max_contracts_on_date} kontraktów" if selected_ticker and sell_date else "Wybierz datę i ticker"
                 )
                 
-                # Strike price
+                # Strike price (bez zmian)
                 strike_price = st.number_input(
                     "Strike price USD:",
                     min_value=0.01,
-                    value=100.00,
+                    value=60.00,  # 🔧 Ustaw na Twoją wartość
                     step=0.01,
-                    format="%.2f",
-                    help="Cena wykonania opcji"
+                    format="%.2f"
                 )
             
             with col_form2:
-                # Premium otrzymana
+                # Premium (bez zmian)
                 premium_received = st.number_input(
                     "Premium otrzymana USD:",
                     min_value=0.01,
-                    value=2.50,
+                    value=5.00,  # 🔧 Ustaw na Twoją wartość
                     step=0.01,
-                    format="%.2f",
-                    help="Premium za sprzedaż CC (za akcję)"
+                    format="%.2f"
                 )
                         # ✅ DODAJ PROWIZJE W OSOBNEJ SEKCJI:
             st.markdown("**💰 Prowizje brokerskie:**")
@@ -241,21 +271,7 @@ def show_sell_cc_tab():
                 )
 
 
-            # Po prowizjach
-            st.markdown("**📅 Harmonogram:**")
-            col_dates1, col_dates2 = st.columns(2)
 
-            with col_dates1:
-                sell_date = st.date_input(
-                    "Data sprzedaży:",
-                    value=date.today() - timedelta(days=30)
-                )
-
-            with col_dates2:
-                expiry_date = st.date_input(
-                    "Data expiry:", 
-                    value=date.today() + timedelta(days=30)
-                )
             
             # Przycisk sprawdzenia pokrycia
             check_coverage = st.form_submit_button("🔍 Sprawdź pokrycie i podgląd", use_container_width=True)
@@ -307,21 +323,24 @@ def show_sell_cc_tab():
         if 'cc_form_data' in st.session_state:
             st.markdown("---")
             show_cc_sell_preview(st.session_state.cc_form_data)
+    
+    
 
 def get_available_tickers_for_cc():
-    """Pobiera tickery z dostępnymi akcjami do pokrycia CC"""
+    """Pobiera tickery z dostępnymi akcjami do pokrycia CC - NAPRAWIONE: uwzględnia datę CC"""
     try:
         conn = db.get_connection()
         if not conn:
             return []
         
         cursor = conn.cursor()
+        
+        # 🔧 NAPRAWKA: Pobierz wszystkie tickery, nie filtruj po quantity_open
         cursor.execute("""
-            SELECT ticker, SUM(quantity_open) as available
+            SELECT ticker, SUM(quantity_total) as total_owned
             FROM lots 
-            WHERE quantity_open > 0
             GROUP BY ticker
-            HAVING SUM(quantity_open) >= 100
+            HAVING SUM(quantity_total) >= 100
             ORDER BY ticker
         """)
         
@@ -335,7 +354,7 @@ def get_available_tickers_for_cc():
         return []
 
 def show_cc_sell_preview(form_data):
-    """Podgląd sprzedaży CC z walidacją pokrycia - PUNKTY 53-54"""
+    """🔧 NAPRAWIONA: Podgląd sprzedaży CC z walidacją pokrycia"""
     st.markdown("### 🎯 Podgląd sprzedaży Covered Call")
     
     ticker = form_data['ticker']
@@ -346,31 +365,34 @@ def show_cc_sell_preview(form_data):
     sell_date = form_data['sell_date']
     
     # WALIDACJA DAT - nie można sprzedać CC przed zakupem akcji
-    lots = db.get_lots_by_ticker(ticker, only_open=True)
-    if lots:
-        earliest_buy_date = min([lot['buy_date'] for lot in lots])
-        if isinstance(earliest_buy_date, str):
-            earliest_buy_date = datetime.strptime(earliest_buy_date, '%Y-%m-%d').date()
-        
-        if sell_date < earliest_buy_date:
-            st.error(f"❌ **BŁĄD DATY**: Nie można sprzedać CC przed zakupem akcji!")
-            st.error(f"   Data sprzedaży CC: {sell_date}")
-            st.error(f"   Najwcześniejszy zakup {ticker}: {earliest_buy_date}")
-            
-            if st.button("❌ Popraw datę", key="fix_date"):
-                if 'show_cc_preview' in st.session_state:
-                    del st.session_state.show_cc_preview
-                st.rerun()
-            return
+    # 🔧 NAPRAWKA: Używaj nowej funkcji chronologii zamiast get_lots_by_ticker
+    earliest_lot_check = db.check_cc_coverage_with_chronology(ticker, 1, sell_date)
     
-    # Sprawdź pokrycie FIFO
+    if earliest_lot_check.get('debug_info', {}).get('owned_on_date', 0) == 0:
+        st.error(f"❌ **BŁĄD DATY**: Nie można sprzedać CC przed zakupem akcji!")
+        st.error(f"   Data sprzedaży CC: {sell_date}")
+        st.error(f"   Brak akcji {ticker} na {sell_date}")
+        
+        if st.button("❌ Popraw datę", key="fix_date"):
+            if 'show_cc_preview' in st.session_state:
+                del st.session_state.show_cc_preview
+            st.rerun()
+        return
+    
+    # 🔧 NAPRAWKA: Sprawdź pokrycie używając naprawionej funkcji
     coverage = db.check_cc_coverage_with_chronology(ticker, contracts, sell_date)
     
     if not coverage.get('can_cover'):
         st.error(f"❌ **BRAK POKRYCIA dla {contracts} kontraktów {ticker}**")
         st.error(f"   {coverage.get('message', 'Nieznany błąd')}")
-        st.write(f"🎯 Potrzeba: {coverage['shares_needed']} akcji")
-        st.write(f"📊 Dostępne: {coverage['shares_available']} akcji")
+        
+        # 🔧 NAPRAWKA: Używaj debug_info zamiast niezdefiniowanych pól
+        debug = coverage.get('debug_info', {})
+        st.write(f"🎯 Potrzeba: {coverage.get('shares_needed', contracts * 100)} akcji")
+        st.write(f"📊 Dostępne na {sell_date}: {debug.get('available_calculated', 0)} akcji")
+        st.write(f"📦 Posiadane na {sell_date}: {debug.get('owned_on_date', 0)} akcji") 
+        st.write(f"💰 Sprzedane przed {sell_date}: {debug.get('sold_before', 0)} akcji")
+        st.write(f"🎯 Zarezerwowane przed {sell_date}: {debug.get('cc_reserved_before', 0)} akcji")
         
         # Przycisk anulowania
         if st.button("❌ Anuluj", key="cancel_cc"):
@@ -385,89 +407,96 @@ def show_cc_sell_preview(form_data):
     st.success(f"✅ **POKRYCIE OK dla {contracts} kontraktów {ticker}**")
     
     # Podstawowe kalkulacje
-    total_premium_usd = premium_received * contracts * 100  # Premium za wszystkie akcje
+    total_premium_usd = premium_received * contracts * 100
     shares_covered = contracts * 100
     
     # Pobierz kurs NBP D-1
     try:
-        nbp_result = nbp_api_client.get_usd_rate_for_date(sell_date)
-        if isinstance(nbp_result, dict):
+        from utils.nbp_api_client import get_usd_rate_for_date
+        nbp_result = get_usd_rate_for_date(sell_date)
+        
+        if isinstance(nbp_result, dict) and 'rate' in nbp_result:
             fx_rate = nbp_result['rate']
             fx_date = nbp_result.get('date', sell_date)
+            fx_success = True
         else:
-            fx_rate = float(nbp_result)
+            fx_rate = float(nbp_result) if nbp_result else 4.0
             fx_date = sell_date
-        
-        total_premium_pln = total_premium_usd * fx_rate
-        fx_success = True
-        
+            fx_success = True
+            
     except Exception as e:
-        st.error(f"❌ Błąd pobierania kursu NBP: {e}")
+        st.warning(f"⚠️ Błąd NBP API: {e}")
         fx_rate = 4.0  # Fallback
         fx_date = sell_date
-        total_premium_pln = total_premium_usd * fx_rate
         fx_success = False
     
-    # Wyświetl szczegóły
+    # Prowizje (opcjonalne)
+    broker_fee = form_data.get('broker_fee', 1.0)
+    reg_fee = form_data.get('reg_fee', 0.1)
+    total_fees = broker_fee + reg_fee
+    net_premium_usd = total_premium_usd - total_fees
+    
+    # PLN calculations
+    total_premium_pln = total_premium_usd * fx_rate
+    net_premium_pln = net_premium_usd * fx_rate
+    
+    # Podgląd podstawowy
     col_preview1, col_preview2, col_preview3 = st.columns(3)
     
     with col_preview1:
-        st.markdown("**📊 Szczegóły CC:**")
-        st.write(f"🏷️ **Ticker**: {ticker}")
-        st.write(f"🎯 **Kontrakty**: {contracts}")
-        st.write(f"📦 **Pokrycie**: {shares_covered} akcji")
-        st.write(f"💰 **Strike**: ${strike_price:.2f}")
+        st.markdown("**💰 Podstawowe dane:**")
+        st.write(f"🎯 **Ticker**: {ticker}")
+        st.write(f"📊 **Kontrakty**: {contracts}")
+        st.write(f"🔒 **Pokrycie**: {shares_covered} akcji")
+        st.write(f"💲 **Strike**: ${strike_price:.2f}")
         st.write(f"📅 **Expiry**: {expiry_date}")
     
     with col_preview2:
-        st.markdown("**💰 Kalkulacje USD:**")
-        st.write(f"💵 **Premium/akcja**: ${premium_received:.2f}")
-        
-        # ✅ DODAJ SZCZEGÓŁY Z PROWIZJAMI:
-        broker_fee = form_data.get('broker_fee', 0.00)
-        reg_fee = form_data.get('reg_fee', 0.00)
-        total_fees = broker_fee + reg_fee
-        net_premium_usd = total_premium_usd - total_fees
-        
-        st.write(f"🎯 **Premium brutto**: ${total_premium_usd:.2f}")
+        st.markdown("**💵 Premium USD:**")
+        st.write(f"💰 **Premium brutto**: ${total_premium_usd:.2f}")
         st.write(f"💸 **Broker fee**: ${broker_fee:.2f}")
-        st.write(f"📋 **Reg fee**: ${reg_fee:.2f}")
+        st.write(f"💸 **Reg fee**: ${reg_fee:.2f}")
         st.write(f"💰 **Razem prowizje**: ${total_fees:.2f}")
         st.success(f"**💚 Premium NETTO: ${net_premium_usd:.2f}**")
         st.write(f"📅 **Data sprzedaży**: {sell_date}")
+    
+    with col_preview3:
+        st.markdown("**🇵🇱 Przeliczenie PLN:**")
+        fees_pln = total_fees * fx_rate
         
         if fx_success:
             st.success(f"💱 **Kurs NBP** ({fx_date}): {fx_rate:.4f}")
         else:
             st.warning(f"⚠️ **Kurs fallback**: {fx_rate:.4f}")
-    
-    with col_preview3:
-        st.markdown("**🇵🇱 Przeliczenie PLN:**")
-        # ✅ DODAJ NETTO PLN:
-        net_premium_pln = net_premium_usd * fx_rate
-        fees_pln = total_fees * fx_rate
         
         st.write(f"💰 **Premium brutto PLN**: {total_premium_pln:.2f} zł")
         st.write(f"💸 **Prowizje PLN**: {fees_pln:.2f} zł")
         st.success(f"**💚 Premium NETTO PLN: {net_premium_pln:.2f} zł**")
     
-    # Alokacja FIFO
+    # 🔧 NAPRAWKA: Alokacja FIFO z właściwymi kluczami
     st.markdown("---")
     st.markdown("### 🔄 Alokacja pokrycia FIFO")
     
-    for i, allocation in enumerate(coverage['fifo_preview']):
-        with st.expander(f"LOT #{allocation['lot_id']} - {allocation['qty_to_reserve']} akcji", expanded=i<2):
-            col_alloc1, col_alloc2 = st.columns(2)
-            
-            with col_alloc1:
-                st.write(f"📅 **Data zakupu**: {allocation['buy_date']}")
-                st.write(f"💰 **Cena zakupu**: ${allocation['buy_price_usd']:.2f}")
-                st.write(f"📊 **Dostępne przed**: {allocation['qty_available']} akcji")
-            
-            with col_alloc2:
-                st.write(f"🎯 **Do rezerwacji**: {allocation['qty_to_reserve']} akcji")
-                st.write(f"📦 **Pozostanie**: {allocation['qty_remaining_after']} akcji")
-                st.write(f"💱 **Kurs zakupu**: {allocation['fx_rate']:.4f}")
+    fifo_preview = coverage.get('fifo_preview', [])
+    if fifo_preview:
+        for i, allocation in enumerate(fifo_preview):
+            with st.expander(f"LOT #{allocation['lot_id']} - {allocation.get('qty_to_reserve', 0)} akcji", expanded=i<2):
+                col_alloc1, col_alloc2 = st.columns(2)
+                
+                with col_alloc1:
+                    st.write(f"📅 **Data zakupu**: {allocation.get('buy_date', 'N/A')}")
+                    st.write(f"💰 **Cena zakupu**: ${allocation.get('buy_price_usd', 0):.2f}")
+                    # 🔧 NAPRAWKA: Używaj właściwego klucza
+                    available_qty = allocation.get('qty_available_on_date', allocation.get('qty_total', 0))
+                    st.write(f"📊 **Dostępne**: {available_qty} akcji")
+                
+                with col_alloc2:
+                    st.write(f"🎯 **Do rezerwacji**: {allocation.get('qty_to_reserve', 0)} akcji")
+                    remaining = allocation.get('qty_remaining_after', available_qty - allocation.get('qty_to_reserve', 0))
+                    st.write(f"📦 **Pozostanie**: {remaining} akcji")
+                    st.write(f"💱 **Kurs zakupu**: {allocation.get('fx_rate', 0):.4f}")
+    else:
+        st.warning("⚠️ Brak szczegółów alokacji FIFO")
     
     # Przygotuj dane do zapisu
     cc_data = {
@@ -480,8 +509,8 @@ def show_cc_sell_preview(form_data):
         'fx_open': fx_rate,
         'fx_open_date': fx_date, 
         'premium_sell_pln': net_premium_pln,
-        'broker_fee': broker_fee,      # <— DODANE
-        'reg_fee': reg_fee,            # <— DODANE
+        'broker_fee': broker_fee,
+        'reg_fee': reg_fee,
         'coverage': coverage
     }
     
@@ -493,7 +522,6 @@ def show_cc_sell_preview(form_data):
     
     with col_btn1:
         if st.button("💾 ZAPISZ COVERED CALL", type="primary", key="save_cc"):
-            # PUNKT 54: Faktyczny zapis CC
             with st.spinner("Zapisywanie CC do bazy..."):
                 save_result = db.save_covered_call_to_database(cc_data)
                 
@@ -501,40 +529,25 @@ def show_cc_sell_preview(form_data):
                     st.success(f"✅ **{save_result['message']}**")
                     st.info(f"💰 **Premium**: ${total_premium_usd:.2f} → {total_premium_pln:.2f} zł")
                     st.info(f"🔒 **Zarezerwowano**: {shares_covered} akcji {ticker}")
-                    st.info(f"💸 **Cashflow utworzony**: +${total_premium_usd:.2f}")
-                    
-                    st.balloons()  # Celebracja! 🎈
-                    
-                    # NIE CZYŚCIMY SESSION STATE - pozwalamy na kolejne CC
-                    st.success("✅ **Możesz teraz sprzedać kolejną CC!**")
-                    
+                    st.balloons()
                 else:
                     st.error(f"❌ **Błąd zapisu**: {save_result['message']}")
     
     with col_btn2:
         if st.button("➕ Nowa CC", key="new_cc_btn"):
-            # Wyczyść formularz dla nowej CC
-            if 'show_cc_preview' in st.session_state:
-                del st.session_state.show_cc_preview
-            if 'cc_form_data' in st.session_state:
-                del st.session_state.cc_form_data
-            if 'cc_to_save' in st.session_state:
-                del st.session_state.cc_to_save
+            # Wyczyść formularz
+            keys_to_clear = ['show_cc_preview', 'cc_form_data', 'cc_to_save']
+            for key in keys_to_clear:
+                if key in st.session_state:
+                    del st.session_state[key]
             st.rerun()
     
     with col_btn3:
         if st.button("❌ Anuluj", key="cancel_cc_preview"):
-            if 'show_cc_preview' in st.session_state:
-                del st.session_state.show_cc_preview
-            if 'cc_form_data' in st.session_state:
-                del st.session_state.cc_form_data
-            if 'cc_to_save' in st.session_state:
-                del st.session_state.cc_to_save
-            st.rerun()
-    
-    # Status punktu
-    st.markdown("---")
-    st.success("✅ **PUNKTY 53-54 UKOŃCZONE**: Formularz sprzedaży CC z zapisem!")
+            keys_to_clear = ['show_cc_preview', 'cc_form_data', 'cc_to_save']
+            for key in keys_to_clear:
+                if key in st.session_state:
+                    del st
 
 def show_buyback_expiry_tab():
     """Tab buyback i expiry - Z PRAWDZIWYM CZĘŚCIOWYM BUYBACK"""
@@ -1995,7 +2008,7 @@ def show_reservations_diagnostics_tab():
                     st.dataframe(lot_rows, use_container_width=True)
                 else:
                     st.info("Brak wpisów mapowania dla tej CC.")
-
+    
 
 if __name__ == "__main__":
     show_options()  

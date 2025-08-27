@@ -54,6 +54,7 @@ def main():
             'Dashboard': '🏠 Dashboard',
             'Stocks': '📊 Stocks',
             'Options': '🎯 Options', 
+            'CC_Chains': '🔗 CC Chains', 
             'Dividends': '💰 Dividends',
             'Cashflows': '💸 Cashflows',
             'Taxes': '📋 Taxes', 
@@ -103,6 +104,14 @@ def main():
             show_options()
         except ImportError:
             st.error("❌ Nie można zaimportować modułu options")
+
+    elif st.session_state.current_page == 'CC_Chains':
+        try:
+            from modules.cc_chains import show_cc_chains
+            show_cc_chains()
+        except ImportError:
+            st.error("❌ Nie można zaimportować modułu cc_chains")        
+            
     elif st.session_state.current_page == 'Dividends':
         show_placeholder('Dividends', '💰', 'Dywidendy - ETAP 5')
     elif st.session_state.current_page == 'Cashflows':

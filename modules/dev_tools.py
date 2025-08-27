@@ -10,6 +10,42 @@ from utils.formatting import format_currency_usd, format_currency_pln, format_pe
 import random
 
 def show_dev_tools():
+    st.markdown("---")
+    st.markdown("### 🔗 CC CHAINS MIGRATION TEST")
+
+    if st.button("🧪 URUCHOM MIGRACJĘ CC CHAINS", key="test_cc_chains_migration"):
+        with st.spinner("Migracja CC Chains..."):
+            result = db.run_cc_chains_migration()
+        
+        if result['success']:
+            st.success("✅ MIGRACJA UDANA!")
+            
+            for step in result['steps_completed']:
+                st.write(step)
+            
+            if 'final_status' in result:
+                st.json(result['final_status'])
+        else:
+            st.error("❌ BŁĘDY W MIGRACJI:")
+            for error in result['errors']:
+                st.write(error)
+
+    if st.button("📋 SPRAWDŹ SCHEMAT BAZY", key="check_db_schema"):
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        
+        # Sprawdź tabele
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        st.write("**Tabele:**", [t[0] for t in tables])
+        
+        # Sprawdź kolumny options_cc
+        cursor.execute("PRAGMA table_info(options_cc)")
+        columns = cursor.fetchall()
+        st.write("**Kolumny options_cc:**", [col[1] for col in columns])
+        
+        conn.close()
+    
     """
     PUNKT 69: Kompletny moduł deweloperski - centrum wszystkich narzędzi
     POPRAWKA: Używam RZECZYWISTYCH nazw funkcji z db.py i nbp_api_client.py

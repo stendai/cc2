@@ -77,6 +77,7 @@ def create_all_tables(conn):
     # results['options_cc'] = create_options_cc_table(conn)      # punkt 10
     # results['dividends'] = create_dividends_table(conn)        # punkt 10
     # results['market_prices'] = create_market_prices_table(conn) # punkt 10
+    # results['cc_chains'] = create_cc_chains_table(conn)	
     
     return results
 
@@ -645,3 +646,72 @@ def get_database_schema_info(conn):
     except Exception as e:
         st.error(f"Błąd pobierania schematu: {e}")
         return {}
+
+# PUNKT 71: Tabela cc_chains w structure.py
+# Dodaj tę funkcję do pliku structure.py
+
+def create_cc_chains_table(conn):
+    """
+    🔗 PUNKT 71: Utworzenie tabeli cc_chains - łańcuchy opcyjne
+    
+    CC Chain = grupa powiązanych covered calls na tym samym tickerze,
+    gdzie każde kolejne CC jest wystawiane po zamknięciu poprzedniego.
+    
+    Args:
+        conn: sqlite3.Connection
+    
+    Returns:
+        bool: True jeśli sukces
+    """
+    try:
+        cursor = conn.cursor()
+        
+        # Tabela cc_chains
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cc_chains (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lot_id INTEGER NOT NULL,       -- 🔗 POWIĄZANIE Z LOT-EM!
+                ticker TEXT NOT NULL,          -- dublowanie dla ułatwienia queries
+                chain_name TEXT,               -- np. "WOLF Chain #1 (LOT #5)"
+                start_date DATE NOT NULL,      -- data pierwszego CC w chain
+                end_date DATE,                 -- data zamknięcia ostatniego CC (NULL = aktywny)
+                status TEXT NOT NULL DEFAULT 'active',  -- active, closed
+                total_contracts INTEGER DEFAULT 0,      -- suma kontraktów w chain
+                total_premium_usd DECIMAL(15,4) DEFAULT 0,  -- suma premii w USD
+                total_pl_pln DECIMAL(15,2) DEFAULT 0,       -- łączny P/L w PLN
+                avg_duration_days DECIMAL(8,2) DEFAULT 0,   -- średni czas trwania CC
+                success_rate DECIMAL(5,2) DEFAULT 0,        -- % zyskownych CC
+                annualized_return DECIMAL(8,4) DEFAULT 0,   -- zwrot roczny %
+                notes TEXT,                    -- notatki użytkownika
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (lot_id) REFERENCES lots(id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Indeksy dla wydajności
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cc_chains_lot_id 
+            ON cc_chains(lot_id)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cc_chains_ticker_status 
+            ON cc_chains(ticker, status)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cc_chains_status_date 
+            ON cc_chains(status, start_date DESC)
+        """)
+        
+        conn.commit()
+        return True
+        
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Błąd tworzenia tabeli cc_chains: {e}")
+        return False
+
+
+

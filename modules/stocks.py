@@ -927,9 +927,24 @@ def show_sales_tab():
         
         with col_sell_btn1:
             if st.button("💾 ZAPISZ SPRZEDAŻ", type="primary", key="save_sell_btn"):
-                if 'sell_to_save' in st.session_state:
-                    if save_sale_to_database(st.session_state.sell_to_save):
-                        # KOMUNIKAT SUKCESU
+                # 🔧 NAPRAWKA: Przygotuj pełne dane do zapisu
+                if 'sell_to_save' in st.session_state and 'sell_form_data' in st.session_state:
+                    
+                    # Połącz dane z podglądu i formularza
+                    sell_data = st.session_state.sell_to_save.copy()
+                    form_data = st.session_state.sell_form_data
+                    
+                    # Upewnij się że mamy sell_date
+                    if 'sell_date' not in sell_data:
+                        sell_data['sell_date'] = form_data.get('sell_date')
+                    
+                    # Upewnij się że mamy inne potrzebne dane
+                    for key in ['ticker', 'quantity', 'sell_price', 'broker_fee', 'reg_fee']:
+                        if key not in sell_data:
+                            sell_data[key] = form_data.get(key)
+                    
+                    # ZAPISZ
+                    if save_sale_to_database(sell_data):
                         st.success("✅ Sprzedaż zapisana pomyślnie!")
                         st.info("💸 Automatyczny cashflow utworzony!")
                         
@@ -941,6 +956,7 @@ def show_sales_tab():
                         st.error("❌ Błąd zapisu sprzedaży!")
                 else:
                     st.error("❌ Brak danych do zapisu!")
+                    st.write("🔍 DEBUG session_state keys:", list(st.session_state.keys()))
         
         with col_sell_btn2:
             if st.button("🔄 Anuluj sprzedaż", key="cancel_sell_btn"):
@@ -955,40 +971,45 @@ def clear_sell_session_state():
             del st.session_state[key]
 
 def show_fifo_preview(ticker):
-    """Podstawowy podgląd FIFO dla tickera (Punkt 36)"""
+    """Podstawowy podgląd FIFO dla tickera (Punkt 36) - NAPRAWIONO"""
     
     try:
         available = db.get_available_quantity(ticker)
         st.write(f"**Dostępne akcje {ticker}: {available}**")
         
         if available > 0:
-            tax_fifo_result = db.calculate_tax_fifo_allocation(ticker, quantity)
-            fifo_allocation = tax_fifo_result['fifo_allocation']
-            st.write(f"**LOT-y w kolejności FIFO ({len(lots)}):**")
+            # 🔧 NAPRAWKA: Pobierz lots przed użyciem
+            lots = db.get_lots_by_ticker(ticker, only_open=True)
             
-            # Pokaż wszystkie LOT-y z detalami
-            for i, lot in enumerate(lots):
-                with st.expander(f"#{i+1} LOT ID {lot['id']} - {lot['quantity_open']} szt.", expanded=i<3):
-                    col_lot1, col_lot2 = st.columns(2)
-                    
-                    with col_lot1:
-                        st.write(f"📅 **Data zakupu:** {lot['buy_date']}")
-                        st.write(f"💰 **Cena zakupu:** {format_currency_usd(lot['buy_price_usd'])}")
-                        st.write(f"📊 **Dostępne:** {lot['quantity_open']} / {lot['quantity_total']}")
-                    
-                    with col_lot2:
-                        st.write(f"💱 **Kurs NBP:** {lot['fx_rate']:.4f}")
-                        st.write(f"💸 **Koszt PLN:** {format_currency_pln(lot['cost_pln'])}")
-                        cost_per_share_pln = lot['cost_pln'] / lot['quantity_total']
-                        st.write(f"🔢 **PLN/akcja:** {format_currency_pln(cost_per_share_pln)}")
+            if lots:
+                st.write(f"**LOT-y w kolejności FIFO ({len(lots)}):**")
+                
+                # Pokaż wszystkie LOT-y z detalami
+                for i, lot in enumerate(lots):
+                    with st.expander(f"#{i+1} LOT ID {lot['id']} - {lot['quantity_open']} szt.", expanded=i<3):
+                        col_lot1, col_lot2 = st.columns(2)
+                        
+                        with col_lot1:
+                            st.write(f"📅 **Data zakupu:** {lot['buy_date']}")
+                            st.write(f"💰 **Cena zakupu:** {format_currency_usd(lot['buy_price_usd'])}")
+                            st.write(f"📊 **Dostępne:** {lot['quantity_open']} / {lot['quantity_total']}")
+                        
+                        with col_lot2:
+                            st.write(f"💱 **Kurs NBP:** {lot['fx_rate']:.4f}")
+                            st.write(f"💸 **Koszt PLN:** {format_currency_pln(lot['cost_pln'])}")
+                            cost_per_share_pln = lot['cost_pln'] / lot['quantity_total']
+                            st.write(f"🔢 **PLN/akcja:** {format_currency_pln(cost_per_share_pln)}")
+            else:
+                st.warning(f"❌ Brak otwartych LOT-ów {ticker}")
         else:
             st.warning(f"❌ Brak dostępnych akcji {ticker}")
             
     except Exception as e:
         st.error(f"Błąd FIFO preview: {e}")
 
+
 def show_sell_preview_with_fifo(ticker, quantity, sell_price, sell_date, broker_fee, reg_fee):
-    """Podgląd sprzedaży z FIFO i kursem NBP D-1 (Punkt 37)"""
+    """🔧 NAPRAWIONO: Podgląd sprzedaży z walidacją temporalną i fix błędów"""
     
     st.markdown("### 💰 Szczegóły sprzedaży FIFO")
     
@@ -1028,14 +1049,52 @@ def show_sell_preview_with_fifo(ticker, quantity, sell_price, sell_date, broker_
         
         proceeds_pln = net_proceeds_usd * sell_fx_rate
         
-        # Pobierz LOT-y FIFO
-        lots = db.get_lots_by_ticker(ticker, only_open=True)
+        # 🚨 NAPRAWKA: Pobierz LOT-y z walidacją temporalną
+        lots = db.get_lots_by_ticker(ticker, only_open=True, sell_date=sell_date)
         
         if not lots:
-            st.error(f"❌ Brak dostępnych LOT-ów dla {ticker}")
+            st.error(f"❌ Brak dostępnych LOT-ów dla {ticker} na datę {sell_date}")
+            st.warning("⚠️ Sprawdź czy LOT-y zostały kupione przed datą sprzedaży!")
+            
+            # 🔍 DIAGNOSTYKA: Pokaż wszystkie LOT-y bez filtra dat
+            all_lots = db.get_lots_by_ticker(ticker, only_open=True)  # Bez sell_date
+            if all_lots:
+                st.markdown("**🔍 DIAGNOSTYKA - Wszystkie LOT-y:**")
+                for lot in all_lots:
+                    buy_date = lot['buy_date']
+                    if str(buy_date) > str(sell_date):
+                        status = "🚫 PRZYSZŁOŚĆ"
+                        color = "red"
+                    else:
+                        status = "✅ OK"
+                        color = "green"
+                    
+                    st.markdown(f"   LOT #{lot['id']}: {buy_date} → {lot['quantity_open']} szt. :{color}[{status}]")
+            
             return None
         
-        # FIFO alokacja
+        # Sprawdź czy wystarczy akcji z LOT-ów przed datą sprzedaży
+        available_before_sell_date = sum(lot['quantity_open'] for lot in lots)
+        
+        if quantity > available_before_sell_date:
+            st.error(f"❌ BŁĄD TEMPORALNY: Próba sprzedaży {quantity} akcji {ticker}")
+            st.error(f"   📅 Data sprzedaży: {sell_date}")
+            st.error(f"   📦 Dostępne przed tą datą: {available_before_sell_date} akcji")
+            st.error(f"   🚫 Nie można sprzedać akcji z przyszłości!")
+            
+            # Pokaż LOT-y z datami
+            st.markdown("**📊 Analiza LOT-ów:**")
+            for lot in lots:
+                buy_date = lot['buy_date']
+                if str(buy_date) > str(sell_date):
+                    status = "🚫 PRZYSZŁOŚĆ"
+                else:
+                    status = "✅ OK"
+                st.write(f"   LOT #{lot['id']}: {buy_date} → {lot['quantity_open']} szt. {status}")
+            
+            return None
+        
+        # ✅ WALIDACJA PRZESZŁA - KONTYNUUJ FIFO ALOKACJĘ
         remaining_to_sell = quantity
         fifo_allocation = []
         
@@ -1062,142 +1121,136 @@ def show_sell_preview_with_fifo(ticker, quantity, sell_price, sell_date, broker_
                 
                 remaining_to_sell -= qty_from_lot
         
-        # Wyświetl podgląd
-        col1, col2, col3 = st.columns(3)
+        if remaining_to_sell > 0:
+            st.error(f"❌ BŁĄD ALOKACJI: Pozostało {remaining_to_sell} akcji do sprzedaży!")
+            return None
         
-        with col1:
-            st.markdown("**Szczegóły sprzedaży:**")
-            st.write(f"📊 **Ticker:** {ticker}")
-            st.write(f"📈 **Ilość:** {quantity:,} akcji")
-            st.write(f"💰 **Cena:** {format_currency_usd(sell_price)}")
-            st.write(f"📅 **Data:** {format_date(sell_date)}")
-        
-        with col2:
-            st.markdown("**Kalkulacje USD:**")
-            st.write(f"Przychód brutto: {format_currency_usd(gross_proceeds)}")
-            st.write(f"Broker fee: {format_currency_usd(broker_fee)}")
-            st.write(f"Reg fee: {format_currency_usd(reg_fee)}")
-            st.write(f"**Przychód netto: {format_currency_usd(net_proceeds_usd)}**")
-        
-        with col3:
-            st.markdown("**Kurs sprzedaży:**")
-            if fx_success:
-                st.success(f"💱 **Kurs NBP** ({sell_fx_date}): {sell_fx_rate:.4f}")
-            else:
-                st.warning(f"⚠️ **Kurs fallback**: {sell_fx_rate:.4f}")
-            
-            st.write(f"**Przychód PLN: {format_currency_pln(proceeds_pln)}**")
-        
-        # Pokaż FIFO alokację
-        st.markdown("---")
-        st.markdown("### 🔄 Alokacja FIFO")
-        
-        total_cost_pln = 0
-        
-        for i, alloc in enumerate(fifo_allocation):
-            total_cost_pln += alloc['cost_pln']
-            
-            with st.expander(f"LOT #{i+1} - ID {alloc['lot_id']}", expanded=i<2):
-                col_fifo1, col_fifo2, col_fifo3 = st.columns(3)
-                
-                with col_fifo1:
-                    st.write(f"📅 **Zakup:** {alloc['lot_date']}")
-                    st.write(f"💰 **Cena zakupu:** {format_currency_usd(alloc['lot_price_usd'])}")
-                    
-                with col_fifo2:
-                    st.write(f"📊 **Użyte:** {alloc['qty_used']} szt.")
-                    st.write(f"💱 **Kurs zakupu:** {alloc['lot_fx_rate']:.4f}")
-                    
-                with col_fifo3:
-                    st.write(f"💸 **Koszt nabycia PLN:** {format_currency_pln(alloc['cost_pln'])}")
-                    st.write(f"🔢 **PLN/akcja:** {format_currency_pln(alloc['cost_pln']/alloc['qty_used'])}")
-        
-        # P/L kalkulacja z dokładnymi kursami
+        # Podsumowanie kosztów
+        total_cost_pln = sum(alloc['cost_pln'] for alloc in fifo_allocation)
         pl_pln = proceeds_pln - total_cost_pln
         
-        st.markdown("---")
-        st.markdown("### 📊 Szczegółowe podsumowanie kursów")
+        # 📋 PODSUMOWANIE DLA ROZLICZENIA PODATKOWEGO
+        st.markdown("#### 📋 PODSUMOWANIE DLA ROZLICZENIA PODATKOWEGO")
         
-        # Tabela kursów dla przejrzystości
-        col_kursy1, col_kursy2 = st.columns(2)
+        col_proceed, col_cost = st.columns(2)
         
-        with col_kursy1:
-            st.markdown("**💰 Przychód (sprzedaż):**")
-            st.write(f"📅 **Data sprzedaży:** {format_date(sell_date)}")
-            st.write(f"💱 **Kurs NBP D-1:** {sell_fx_rate:.4f} ({sell_fx_date})")
-            st.write(f"💵 **Kwota USD:** {format_currency_usd(net_proceeds_usd)}")
-            st.write(f"💰 **Kwota PLN:** {format_currency_pln(proceeds_pln)}")
+        with col_proceed:
+            st.markdown("**💰 PRZYCHÓD (SPRZEDAŻ):**")
+            st.write(f"📅 Data transakcji: **{sell_date}**")
+            
+            # Znajdź datę kursu NBP dla sprzedaży 
+            fx_date_info = ""
+            if fx_success:
+                fx_date_info = f" (NBP: **{sell_fx_date}**)"
+            
+            st.write(f"🏦 Data kursu NBP: **{sell_fx_date}**")
+            st.write(f"💱 Kurs NBP: **{sell_fx_rate:.4f} PLN/USD**")
+            st.write(f"💵 Kwota USD: **${gross_proceeds:.2f}** (brutto)")
+            st.write(f"💸 Prowizje USD: **${total_fees:.2f}**")
+            st.write(f"💵 Kwota USD: **${net_proceeds_usd:.2f}** (netto)")
+            st.write(f"💰 **PRZYCHÓD PLN: {proceeds_pln:,.2f} zł**")
         
-        with col_kursy2:
-            st.markdown("**💸 Koszt nabycia (FIFO):**")
-            # Pokaż unikalne kursy zakupu
-            unique_rates = {}
+        with col_cost:
+            st.markdown("**💸 KOSZT NABYCIA (FIFO):**")
+            
             for alloc in fifo_allocation:
-                rate_key = f"{alloc['lot_fx_rate']:.4f}"
-                if rate_key not in unique_rates:
-                    unique_rates[rate_key] = {
-                        'rate': alloc['lot_fx_rate'],
-                        'date': alloc['lot_date'],
-                        'qty': alloc['qty_used'],
-                        'cost': alloc['cost_pln']
-                    }
-                else:
-                    unique_rates[rate_key]['qty'] += alloc['qty_used']
-                    unique_rates[rate_key]['cost'] += alloc['cost_pln']
+                # Pobierz datę kursu NBP dla tego LOT-a
+                lot_buy_date = alloc['lot_date']
+                lot_fx_rate = alloc['lot_fx_rate']
+                
+                # Spróbuj znaleźć właściwą datę kursu NBP
+                try:
+                    # Może być cached w session_state
+                    lot_nbp_key = f"buy_nbp_rate_{ticker}_{lot_buy_date}"
+                    
+                    if lot_nbp_key in st.session_state:
+                        # Używamy cache
+                        st.write(f"💾 Używam kursu z cache: {lot_fx_rate:.4f} na {lot_buy_date}")
+                    else:
+                        # Próbuj pobrać aktualny kurs NBP D-1 dla tej daty
+                        try:
+                            lot_nbp_result = nbp_api_client.get_usd_rate_for_date(lot_buy_date)
+                            if isinstance(lot_nbp_result, dict):
+                                actual_nbp_date = lot_nbp_result.get('date', lot_buy_date) 
+                                if str(actual_nbp_date) != str(lot_buy_date):
+                                    st.write(f"⚠️ Kurs na D-1 ({actual_nbp_date}) niedostępny, używam {lot_buy_date}")
+                            else:
+                                st.write(f"📊 Kurs NBP D-1 dla {lot_buy_date}")
+                        except Exception as inner_e:
+                            # Fallback
+                            pass
+                            
+                except Exception as e:  # ← DODAJ TO
+                    # Fallback dla outer try
+                    pass
+                                            
+                
+                # Podstawowe info o LOT-cie
+                st.write(f"📅 Zakup: **{lot_buy_date}** (NBP: **{lot_buy_date}**)")
+                st.write(f"💱 Kurs: **{lot_fx_rate:.4f}** → {alloc['qty_used']} szt. → **{alloc['cost_pln']:,.2f} zł**")
             
-            for rate_info in unique_rates.values():
-                st.write(f"💱 **Kurs {rate_info['rate']:.4f}** ({rate_info['date']})")
-                st.write(f"  └ {rate_info['qty']} szt. → {format_currency_pln(rate_info['cost'])}")
-            
-            st.write(f"💸 **Koszt łączny:** {format_currency_pln(total_cost_pln)}")
+            st.write(f"💸 **KOSZT ŁĄCZNY: {total_cost_pln:,.2f} zł**")
         
-        st.markdown("---")
-        st.markdown("### 💰 Wynik finansowy")
+        # P/L
+        if pl_pln >= 0:
+            st.success(f"📊 **P/L: {pl_pln:,.2f} zł** 🟢")
+        else:
+            st.error(f"📊 **P/L: {pl_pln:,.2f} zł** 🔴")
         
-        col_pl1, col_pl2, col_pl3 = st.columns(3)
+        # Szczegóły FIFO
+        st.markdown("#### 🔄 Szczegóły alokacji FIFO")
         
-        with col_pl1:
-            st.metric("Przychód PLN", f"{proceeds_pln:,.2f} zł")
+        for i, alloc in enumerate(fifo_allocation):
+            with st.expander(f"LOT #{alloc['lot_id']} - {alloc['qty_used']} szt @ ${alloc['lot_price_usd']:.2f}", expanded=False):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"📅 Data zakupu: {alloc['lot_date']}")
+                    st.write(f"💰 Cena USD: ${alloc['lot_price_usd']:.2f}")
+                    st.write(f"📊 Użyto: {alloc['qty_used']} szt")
+                
+                with col2:
+                    st.write(f"💱 Kurs NBP: {alloc['lot_fx_rate']:.4f}")
+                    st.write(f"💸 Koszt PLN: {alloc['cost_pln']:,.2f} zł")
+                    st.write(f"📦 Pozostanie: {alloc['qty_remaining']} szt")
         
-        with col_pl2:
-            st.metric("Koszt nabycia PLN", f"{total_cost_pln:,.2f} zł")
-        
-        with col_pl3:
-            if pl_pln >= 0:
-                st.metric("🟢 Zysk PLN", f"+{pl_pln:,.2f} zł")
-            else:
-                st.metric("🔴 Strata PLN", f"{pl_pln:,.2f} zł")
-        
-        # Przygotuj dane do zapisu
-        sell_data = {
-            "ticker": ticker,
-            "quantity": quantity,
-            "sell_price": sell_price,
-            "sell_date": sell_date,
-            "broker_fee": broker_fee,
-            "reg_fee": reg_fee,
-            "sell_fx_rate": sell_fx_rate,
-            "sell_fx_date": sell_fx_date,
-            "proceeds_pln": proceeds_pln,
-            "cost_pln": total_cost_pln,
-            "pl_pln": pl_pln,
-            "fifo_allocation": fifo_allocation
+        # Zapisz dane do session_state dla execute_stock_sale
+        st.session_state.sell_preview_data = {
+            'ticker': ticker,
+            'quantity': quantity,
+            'sell_price': sell_price,
+            'sell_date': sell_date,
+            'broker_fee': broker_fee,
+            'reg_fee': reg_fee,
+            'sell_fx_rate': sell_fx_rate,
+            'proceeds_pln': proceeds_pln,
+            'total_cost_pln': total_cost_pln,
+            'pl_pln': pl_pln,
+            'fifo_allocation': fifo_allocation
         }
         
-        st.markdown("---")
-        st.success("**Punkt 37**: Podgląd z dokładnymi kursami ✅")
-        st.info("💡 **Punkt 38**: Gotowe do zapisu - kliknij przycisk poniżej!")
-        
-        return sell_data
+        return {
+            'success': True,
+            'proceeds_pln': proceeds_pln,
+            'total_cost_pln': total_cost_pln,
+            'pl_pln': pl_pln,
+            'fifo_allocation': fifo_allocation
+        }
         
     except Exception as e:
-        st.error(f"❌ Błąd podglądu sprzedaży: {e}")
+        st.error(f"Błąd podglądu sprzedaży: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
 
 def save_sale_to_database(sell_data):
-    """Zapis sprzedaży do bazy danych (Punkt 38) - NAPRAWIONY"""
+    """Zapis sprzedaży do bazy danych - NAPRAWIONE: obsługa sell_date"""
     
     try:
+        # 🔍 DEBUGOWANIE: Sprawdź co mamy w sell_data
+        st.write("🔍 DEBUG - Zawartość sell_data:")
+        st.json(sell_data)  # TYMCZASOWO - do debugowania
+        
         conn = db.get_connection()
         if not conn:
             st.error("❌ Błąd połączenia z bazą danych!")
@@ -1205,10 +1258,53 @@ def save_sale_to_database(sell_data):
         
         cursor = conn.cursor()
         
-        # Przygotuj datę sprzedaży
-        sell_date_str = sell_data['sell_date']
+        # 🔧 NAPRAWKA: Sprawdź różne możliwe nazwy klucza
+        sell_date_str = None
+        
+        if 'sell_date' in sell_data:
+            sell_date_str = sell_data['sell_date']
+        elif 'date' in sell_data:
+            sell_date_str = sell_data['date']
+        else:
+            # Sprawdź session_state jako fallback
+            if 'sell_form_data' in st.session_state:
+                form_data = st.session_state.sell_form_data
+                if 'sell_date' in form_data:
+                    sell_date_str = form_data['sell_date']
+        
+        if sell_date_str is None:
+            st.error("❌ Brak daty sprzedaży w danych!")
+            return False
+        
+        # Konwersja daty na string
         if hasattr(sell_date_str, 'strftime'):
             sell_date_str = sell_date_str.strftime('%Y-%m-%d')
+        else:
+            sell_date_str = str(sell_date_str)
+        
+        # 🔧 NAPRAWKA: Pobierz pozostałe dane z właściwych źródeł
+        ticker = sell_data.get('ticker') or st.session_state.get('sell_form_data', {}).get('ticker')
+        quantity = sell_data.get('quantity') or st.session_state.get('sell_form_data', {}).get('quantity')
+        sell_price = sell_data.get('sell_price') or st.session_state.get('sell_form_data', {}).get('sell_price')
+        broker_fee = sell_data.get('broker_fee', 0) or st.session_state.get('sell_form_data', {}).get('broker_fee', 0)
+        reg_fee = sell_data.get('reg_fee', 0) or st.session_state.get('sell_form_data', {}).get('reg_fee', 0)
+        
+        # Sprawdź czy mamy wszystkie wymagane dane
+        missing_data = []
+        if not ticker: missing_data.append('ticker')
+        if not quantity: missing_data.append('quantity')
+        if not sell_price: missing_data.append('sell_price')
+        
+        if missing_data:
+            st.error(f"❌ Brak danych: {', '.join(missing_data)}")
+            return False
+        
+        # Pobierz pozostałe kalkulacje z sell_data
+        sell_fx_rate = sell_data.get('sell_fx_rate', 4.0)  # Fallback
+        proceeds_pln = sell_data.get('proceeds_pln', 0)
+        cost_pln = sell_data.get('total_cost_pln', 0) or sell_data.get('cost_pln', 0)
+        pl_pln = sell_data.get('pl_pln', 0)
+        fifo_allocation = sell_data.get('fifo_allocation', [])
         
         # 1. ZAPISZ GŁÓWNĄ SPRZEDAŻ (stock_trades)
         cursor.execute("""
@@ -1217,57 +1313,38 @@ def save_sale_to_database(sell_data):
                 broker_fee_usd, reg_fee_usd, proceeds_pln, cost_pln, pl_pln
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            sell_data['ticker'],
-            sell_data['quantity'],
-            sell_data['sell_price'],
-            sell_date_str,
-            sell_data['sell_fx_rate'],
-            sell_data['broker_fee'],
-            sell_data['reg_fee'],
-            sell_data['proceeds_pln'],
-            sell_data['cost_pln'],
-            sell_data['pl_pln']
+            ticker, quantity, sell_price, sell_date_str, sell_fx_rate,
+            broker_fee, reg_fee, proceeds_pln, cost_pln, pl_pln
         ))
         
         trade_id = cursor.lastrowid
         
-        # 🔧 NAPRAWKA: Podziel prowizje proporcjonalnie po LOT-ach
-        total_fees_usd = sell_data['broker_fee'] + sell_data['reg_fee']
-        total_quantity = sell_data['quantity']
+        # 2. ZAPISZ ROZBICIA FIFO (stock_trade_splits)
+        if fifo_allocation:
+            for alloc in fifo_allocation:
+                cursor.execute("""
+                    INSERT INTO stock_trade_splits (
+                        trade_id, lot_id, qty_from_lot, cost_part_pln, 
+                        commission_part_usd, commission_part_pln
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    trade_id, 
+                    alloc['lot_id'], 
+                    alloc['qty_used'], 
+                    alloc['cost_pln'],
+                    0.0,  # Commission part USD (will calculate proportionally if needed)
+                    0.0   # Commission part PLN (will calculate proportionally if needed) 
+                ))
+                
+                # 3. ZAKTUALIZUJ quantity_open w lots
+                cursor.execute("""
+                    UPDATE lots 
+                    SET quantity_open = quantity_open - ?
+                    WHERE id = ?
+                """, (alloc['qty_used'], alloc['lot_id']))
         
-        # 2. ZAPISZ ROZBICIA FIFO (stock_trade_splits) z prowizjami
-        for alloc in sell_data['fifo_allocation']:
-            # Proporcjonalna prowizja dla tego LOT-a
-            qty_proportion = alloc['qty_used'] / total_quantity
-            commission_part_usd = total_fees_usd * qty_proportion
-            commission_part_pln = commission_part_usd * sell_data['sell_fx_rate']
-            
-            cursor.execute("""
-                INSERT INTO stock_trade_splits (
-                    trade_id, lot_id, qty_from_lot, cost_part_pln,
-                    commission_part_usd, commission_part_pln
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                trade_id,
-                alloc['lot_id'],
-                alloc['qty_used'],
-                alloc['cost_pln'],
-                commission_part_usd,
-                commission_part_pln
-            ))
-            
-            # 3. AKTUALIZUJ quantity_open W LOT-ach
-            cursor.execute("""
-                UPDATE lots 
-                SET quantity_open = quantity_open - ?
-                WHERE id = ?
-            """, (alloc['qty_used'], alloc['lot_id']))
-        
-        # 4. UTWÓRZ CASHFLOW (przychód ze sprzedaży)
-        net_proceeds = (sell_data['quantity'] * sell_data['sell_price'] - 
-                       sell_data['broker_fee'] - sell_data['reg_fee'])
-        
-        cashflow_description = f"Sprzedaż {sell_data['quantity']} {sell_data['ticker']} @ {sell_data['sell_price']:.2f}"
+        # 4. UTWÓRZ CASHFLOW dla sprzedaży
+        net_proceeds_usd = (quantity * sell_price) - broker_fee - reg_fee
         
         cursor.execute("""
             INSERT INTO cashflows (
@@ -1275,12 +1352,12 @@ def save_sale_to_database(sell_data):
                 description, ref_table, ref_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            'stock_sell',  # Typ dla sprzedaży
-            net_proceeds,  # Dodatnia kwota (przychód)
+            'stock_sell',
+            net_proceeds_usd,
             sell_date_str,
-            sell_data['sell_fx_rate'],
-            sell_data['proceeds_pln'],
-            cashflow_description,
+            sell_fx_rate,
+            proceeds_pln,
+            f'Sprzedaż {quantity} {ticker} @ ${sell_price:.2f}',
             'stock_trades',
             trade_id
         ))
@@ -1288,17 +1365,29 @@ def save_sale_to_database(sell_data):
         conn.commit()
         conn.close()
         
-        st.success(f"✅ **Sprzedaż zapisana!** Trade ID: {trade_id}")
-        st.info(f"🔄 Zaktualizowano {len(sell_data['fifo_allocation'])} LOT-ów")
-        st.info(f"💰 Prowizje podzielone proporcjonalnie: ${total_fees_usd:.2f}")
+        # 5. KOMUNIKAT SUKCESU i zapisz do session_state
+        st.session_state.last_sale_success = {
+            'ticker': ticker,
+            'quantity': quantity,
+            'price': sell_price,
+            'pl_pln': pl_pln,
+            'fifo_count': len(fifo_allocation),
+            'total_fees': broker_fee + reg_fee
+        }
         
         return True
         
     except Exception as e:
         st.error(f"❌ Błąd zapisu sprzedaży: {e}")
-        if conn:
-            conn.rollback()
-            conn.close()
+        import traceback
+        st.error(f"📋 Traceback: {traceback.format_exc()}")
+        
+        if 'conn' in locals():
+            try:
+                conn.rollback()
+                conn.close()
+            except:
+                pass
         return False
 
 def show_lots_table():
@@ -1505,9 +1594,6 @@ def show_lots_table():
                 key="lots_real_status_filter"
             )
         
-        with col_filter3:
-            show_details = st.checkbox("📋 Pokaż detale CC", key="show_cc_details")
-        
         # =====================================
         # PRZETWARZANIE I FILTROWANIE
         # =====================================
@@ -1526,26 +1612,63 @@ def show_lots_table():
             cost_pln_total = row[7]
             broker_fee = row[8] or 0
             reg_fee = row[9] or 0
-            qty_under_cc = row[10] or 0
-            qty_sold = row[11] or 0
-            math_check_total = row[12] or qty_total
-            cc_details = row[13] or ""
             
+            # NAPRAWKA: OBLICZ LOKALNIE - NIE UFAJ SQL!
+            
+            # 1. Sprawdź RZECZYWISTE sprzedaże tego LOT-a
+            cursor.execute("""
+                SELECT COALESCE(SUM(qty_from_lot), 0)
+                FROM stock_trade_splits WHERE lot_id = ?
+            """, (lot_id,))
+            qty_sold = cursor.fetchone()[0] or 0
+            
+            # 2. Oblicz ile pod CC
+            qty_under_cc = qty_total - qty_open - qty_sold
+            
+            # 3. CC Details
+            if qty_under_cc > 0:
+                cursor.execute("""
+                    SELECT GROUP_CONCAT('CC#' || oc.id)
+                    FROM cc_lot_mappings clm
+                    JOIN options_cc oc ON clm.cc_id = oc.id
+                    WHERE clm.lot_id = ? AND oc.status = 'open'
+                """, (lot_id,))
+            
+            math_check_total = row[12] or qty_total            
             # FILTRY
             if ticker_filter != 'Wszystkie' and ticker != ticker_filter:
                 continue
             
             # Określ status LOT-a
-            if qty_open == qty_total and qty_under_cc == 0 and qty_sold == 0:
+            if qty_open == qty_total:
                 lot_status = '🟢 Całkowicie dostępne'
-            elif qty_open == 0 and qty_under_cc > 0 and qty_sold == 0:
-                lot_status = '🔒 Pod CC'
-            elif qty_open == 0 and qty_under_cc == 0 and qty_sold > 0:
-                lot_status = '💸 Sprzedane'
-            elif qty_open > 0 or qty_under_cc > 0 or qty_sold > 0:
-                lot_status = '⚡ Mieszane'
+            elif qty_open == 0:
+                # Sprawdź czy ticker ma otwarte CC
+                cursor.execute("""
+                    SELECT COUNT(*) FROM options_cc 
+                    WHERE ticker = ? AND status = 'open'
+                """, (ticker,))
+                has_open_cc = cursor.fetchone()[0] > 0
+                
+                # Sprawdź czy LOT został sprzedany
+                cursor.execute("""
+                    SELECT COALESCE(SUM(qty_from_lot), 0)
+                    FROM stock_trade_splits
+                    WHERE lot_id = ?
+                """, (lot_id,))
+                qty_actually_sold = cursor.fetchone()[0] or 0
+                
+                if qty_actually_sold > 0:
+                    lot_status = '💸 Sprzedane'
+                elif has_open_cc:
+                    lot_status = '🔒 Pod CC'  
+                else:
+                    lot_status = '❓ Nieznane'
+                    
+            elif 0 < qty_open < qty_total:
+                lot_status = '⚡ Częściowe'
             else:
-                lot_status = '❓ Nieznane'
+                lot_status = '❌ Błąd'
             
             # Sprawdź matematykę
             calculated_total = qty_open + qty_under_cc + qty_sold
@@ -1591,8 +1714,6 @@ def show_lots_table():
                 'Value Under CC': f"{value_under_cc:,.0f} zł" if value_under_cc > 0 else "-", 
                 'Value Sold': f"{value_sold:,.0f} zł" if value_sold > 0 else "-",
                 
-                # SZCZEGÓŁY CC (jeśli enabled)
-                'CC Details': cc_details if show_details else ""
             }
             
             table_data.append(row_data)
@@ -1633,12 +1754,6 @@ def show_lots_table():
             'Value Sold': st.column_config.TextColumn('Val. Sold', width=100)
         }
         
-        # Dodaj kolumnę CC Details jeśli enabled
-        if show_details:
-            columns_config['CC Details'] = st.column_config.TextColumn('CC Details', width=200)
-        else:
-            # Usuń kolumnę z DataFrame
-            df = df.drop('CC Details', axis=1)
         
         st.dataframe(
             df,
