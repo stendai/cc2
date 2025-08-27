@@ -1300,8 +1300,6 @@ def check_cc_coverage_with_chronology(ticker, contracts, cc_sell_date):
         }
 
 
-
-
 # BONUS: Uproszczona wersja jeśli nadal są problemy
 def check_cc_coverage_simple(ticker, contracts):
     """
@@ -1362,9 +1360,34 @@ def reserve_shares_for_cc(ticker, contracts, cc_id):
     try:
         # Sprawdź czy można zarezerwować
         from datetime import date
-        coverage = check_cc_coverage_with_chronology(ticker, contracts, date.today())
+        coverage = check_cc_coverage_with_chronology(ticker, contracts, sell_date)
+            # 🚨 DODAJ TEN DEBUG BLOK:
+        st.markdown("### 🔍 DEBUG: Co zwraca funkcja pokrycia?")
+        with st.expander("Szczegóły wyniku check_cc_coverage_with_chronology", expanded=True):
+            st.json(coverage)
+            
+            # Sprawdź konkretne pola
+            can_cover = coverage.get('can_cover', False)
+            lots_used = coverage.get('lots_used', [])  # ← TO JEST KLUCZOWE!
+            fifo_preview = coverage.get('fifo_preview', [])
+            
+            st.write(f"**can_cover**: {can_cover}")
+            st.write(f"**lots_used** count: {len(lots_used)}")
+            st.write(f"**fifo_preview** count: {len(fifo_preview)}")
+            
+            if lots_used:
+                st.write("**Szczegóły lots_used:**")
+                for lot in lots_used:
+                    st.write(f"- LOT #{lot.get('lot_id')}: {lot.get('qty_available', 0)} dostępne")
+            
+            if fifo_preview:
+                st.write("**Szczegóły fifo_preview:**") 
+                for lot in fifo_preview:
+                    st.write(f"- LOT #{lot.get('lot_id')}: zarezerwuje {lot.get('qty_to_reserve', 0)} akcji")
+ 
         
         if not coverage['can_cover']:
+            st.error(f"❌ **BRAK POKRYCIA dla {contracts} kontraktów {ticker}**")
             st.error(f"❌ Nie można zarezerwować {shares_needed} akcji {ticker}")
             st.error(f"   Powód: {coverage.get('message', 'Nieznany błąd')}")
             return False

@@ -353,7 +353,311 @@ def get_available_tickers_for_cc():
         st.error(f"Błąd pobierania tickerów: {e}")
         return []
 
+# DODAJ DO OPCJI DEBUG w show_cc_sell_preview (zamiast skomplikowanego debug)
+
+# DODAJ DO OPCJI DEBUG w show_cc_sell_preview (zamiast skomplikowanego debug)
+
 def show_cc_sell_preview(form_data):
+    import streamlit as st  # 🔧 NAPRAWKA importu
+    
+    st.markdown("### 🎯 Podgląd sprzedaży Covered Call")
+    
+    ticker = form_data['ticker']
+    contracts = form_data['contracts']
+    sell_date = form_data['sell_date']
+    
+    # 🔍 PROSTY DEBUG - sprawdź bezpośrednio w bazie
+    st.markdown("### 🚨 DEBUG: Sprawdzenie bazy danych")
+    
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        
+        # 🔧 ZDEFINIUJ WSZYSTKIE ZMIENNE NA POCZĄTKU
+        total_reserved = 0
+        total_sold_before = 0
+        total_on_date = 0
+        
+        # 1. Wszystkie LOT-y tego tickera
+        cursor.execute("""
+            SELECT id, buy_date, quantity_total, quantity_open, buy_price_usd
+            FROM lots 
+            WHERE ticker = ? 
+            ORDER BY buy_date, id
+        """, (ticker,))
+        
+        all_lots = cursor.fetchall()
+        st.write(f"**🔍 Wszystkie LOT-y {ticker}:**")
+        for lot in all_lots:
+            lot_id, buy_date, qty_total, qty_open, buy_price = lot
+            st.write(f"- LOT #{lot_id}: kup {buy_date}, total={qty_total}, open={qty_open}, cena=${buy_price}")
+        
+        # 2. Sprawdź które LOT-y były dostępne na 1 sierpnia
+        cursor.execute("""
+            SELECT id, buy_date, quantity_total, quantity_open 
+            FROM lots 
+            WHERE ticker = ? AND buy_date <= ?
+            ORDER BY buy_date, id
+        """, (ticker, sell_date))
+        
+        lots_on_date = cursor.fetchall()
+        st.write(f"**📅 LOT-y dostępne na {sell_date}:**")
+        for lot in lots_on_date:
+            lot_id, buy_date, qty_total, qty_open = lot
+            total_on_date += qty_total  # 🔧 UŻYWAJ JUŻ ZDEFINIOWANEJ ZMIENNEJ
+            st.write(f"- LOT #{lot_id}: {buy_date} → {qty_total} akcji")
+        
+        st.success(f"✅ **RAZEM na {sell_date}: {total_on_date} akcji**")
+        
+        # 3. Sprawdź sprzedaże PRZED datą CC
+        cursor.execute("""
+            SELECT st.sell_date, sts.qty_from_lot, sts.lot_id
+            FROM stock_trades st
+            JOIN stock_trade_splits sts ON st.id = sts.trade_id
+            JOIN lots l ON sts.lot_id = l.id
+            WHERE l.ticker = ? AND st.sell_date < ?
+            ORDER BY st.sell_date
+        """, (ticker, sell_date))
+        
+        sells_before = cursor.fetchall()
+        st.write(f"**💸 Sprzedaże przed {sell_date}:**")
+        for sell in sells_before:
+            sell_date_db, qty_sold, lot_id = sell
+            total_sold_before += qty_sold  # 🔧 UŻYWAJ JUŻ ZDEFINIOWANEJ ZMIENNEJ
+            st.write(f"- {sell_date_db}: sprzedano {qty_sold} z LOT #{lot_id}")
+        
+        # 4. Sprawdź WSZYSTKIE CC (nie tylko przed datą)
+        cursor.execute("""
+            SELECT id, open_date, contracts, expiry_date, status
+            FROM options_cc 
+            WHERE ticker = ?
+            ORDER BY open_date
+        """, (ticker,))
+        
+        cc_before = cursor.fetchall()
+        st.write(f"**🎯 WSZYSTKIE CC {ticker}:**")
+        total_cc_shares_before = 0
+        for cc in cc_before:
+            cc_id, open_date, contracts, expiry_date, status = cc
+            cc_shares = contracts * 100
+            total_cc_shares_before += cc_shares
+            st.write(f"- CC #{cc_id}: {open_date} → {contracts} kontr. ({cc_shares} akcji), status={status}")
+        
+        # PODSUMOWANIE
+        available_on_date = total_on_date - total_sold_before - total_reserved  # Używaj total_reserved
+        
+        st.markdown("---")
+        st.markdown("### 📊 PODSUMOWANIE:")
+        st.write(f"🏪 **Posiadane na {sell_date}**: {total_on_date} akcji")
+        st.write(f"💸 **Sprzedane przed**: {total_sold_before} akcji") 
+        st.write(f"📦 **FAKTYCZNIE zarezerwowane**: {total_reserved} akcji")
+        st.write(f"🔢 **quantity_open w LOT-ie**: {all_lots[0][3] if all_lots else 0}")
+        st.write(f"✅ **DOSTĘPNE**: {available_on_date} akcji")
+        st.write(f"🎯 **POTRZEBNE**: {contracts * 100} akcji")
+        
+        if available_on_date >= contracts * 100:
+            st.success(f"✅ **WYSTARCZY!** Można wystawić {contracts} CC")
+        else:
+            st.error(f"❌ **BRAKUJE** {contracts * 100 - available_on_date} akcji")
+        
+        # 🚨 PRZYCISK NAPRAWCZY
+        st.markdown("---")
+        if st.button("🔧 NAPRAW bought_back CC - zwolnij zablokowane akcje", key="fix_bought_back"):
+            with st.spinner("Naprawianie bought_back CC..."):
+                try:
+                    # Znajdź wszystkie bought_back CC które nadal mają rezerwacje
+                    cursor.execute("""
+                        SELECT DISTINCT ocr.cc_id
+                        FROM options_cc_reservations ocr
+                        JOIN options_cc oc ON ocr.cc_id = oc.id
+                        WHERE oc.status IN ('bought_back', 'expired')
+                    """)
+                    
+                    bad_cc_ids = [row[0] for row in cursor.fetchall()]
+                    fixed_count = 0
+                    
+                    for cc_id in bad_cc_ids:
+                        # Pobierz rezerwacje dla tego CC
+                        cursor.execute("""
+                            SELECT lot_id, qty_reserved
+                            FROM options_cc_reservations
+                            WHERE cc_id = ?
+                        """, (cc_id,))
+                        
+                        reservations_to_fix = cursor.fetchall()
+                        
+                        for lot_id, qty_reserved in reservations_to_fix:
+                            # Zwolnij akcje w LOT-ie
+                            cursor.execute("""
+                                UPDATE lots 
+                                SET quantity_open = quantity_open + ?
+                                WHERE id = ?
+                            """, (qty_reserved, lot_id))
+                        
+                        # Usuń rezerwacje
+                        cursor.execute("""
+                            DELETE FROM options_cc_reservations
+                            WHERE cc_id = ?
+                        """, (cc_id,))
+                        
+                        fixed_count += 1
+                    
+                    conn.commit()
+                    st.success(f"✅ Naprawiono {fixed_count} bought_back/expired CC!")
+                    st.info("🔄 Odśwież stronę aby zobaczyć zmiany")
+                    
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"Błąd naprawki: {e}")
+        # DODAJ TO w debug sekcji ZARAZ PO "🚨 PRZYCISK NAPRAWCZY" 
+
+        # 🔍 DODATKOWA DIAGNOSTYKA - dlaczego quantity_open=0?
+        st.markdown("### 🔍 DLACZEGO quantity_open=0?")
+        
+        # Sprawdź czy istnieje inna tabela mapowań
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name LIKE '%mapping%' OR name LIKE '%reservation%'
+        """)
+        mapping_tables = cursor.fetchall()
+        st.write("**Tabele mapowań w bazie:**", [t[0] for t in mapping_tables])
+        
+        # Sprawdź historię quantity_open tego LOT-a
+        lot_id = all_lots[0][0] if all_lots else None
+        if lot_id:
+            st.write(f"**Historia LOT #{lot_id}:**")
+            st.write(f"- quantity_total: {all_lots[0][2]}")
+            st.write(f"- quantity_open: {all_lots[0][3]}")
+            
+            # Sprawdź sprzedaże z tego LOT-a
+            cursor.execute("""
+                SELECT sts.trade_id, sts.qty_from_lot, st.sell_date
+                FROM stock_trade_splits sts
+                JOIN stock_trades st ON sts.trade_id = st.id
+                WHERE sts.lot_id = ?
+                ORDER BY st.sell_date
+            """, (lot_id,))
+            
+            lot_sales = cursor.fetchall()
+            total_sold_from_lot = sum(sale[1] for sale in lot_sales)
+            st.write(f"**Sprzedaże z LOT #{lot_id}:**")
+            for sale in lot_sales:
+                st.write(f"- Trade #{sale[0]}: sprzedano {sale[1]} na {sale[2]}")
+            st.write(f"- **RAZEM sprzedane**: {total_sold_from_lot}")
+            
+            # OBLICZ co POWINNO być w quantity_open
+            expected_open = all_lots[0][2] - total_sold_from_lot  # total - sprzedane
+            actual_open = all_lots[0][3]
+            difference = expected_open - actual_open
+            
+            st.write(f"**ANALIZA:**")
+            st.write(f"- Powinno być quantity_open: {expected_open}")  
+            st.write(f"- Faktycznie jest: {actual_open}")
+            st.write(f"- **RÓŻNICA: {difference}** ← To jest zablokowane pod CC!")
+            
+            if difference > 0:
+                st.error(f"❌ **{difference} akcji jest gdzieś zablokowane ale nie widać gdzie!**")
+                
+
+                
+        # Sprawdź czy są jakieś inne dziwne tabele
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        all_tables = [t[0] for t in cursor.fetchall()]
+        st.write("**Wszystkie tabele:**", all_tables)
+        # DODAJ TO w debug sekcji ZARAZ PO "Wszystkie tabele:"
+
+        # 🔍 SPRAWDŹ cc_lot_mappings
+        st.markdown("### 🔍 Sprawdzenie tabeli cc_lot_mappings")
+        cursor.execute("""
+            SELECT clm.cc_id, clm.lot_id, clm.shares_reserved, oc.status, oc.ticker
+            FROM cc_lot_mappings clm
+            JOIN options_cc oc ON clm.cc_id = oc.id
+            WHERE oc.ticker = ?
+            ORDER BY clm.cc_id
+        """, (ticker,))
+        
+        cc_mappings = cursor.fetchall()
+        if cc_mappings:
+            st.write("**🔍 Mapowania w cc_lot_mappings:**")
+            total_in_mappings = 0
+            for mapping in cc_mappings:
+                cc_id, lot_id, shares_reserved, cc_status, cc_ticker = mapping
+                total_in_mappings += shares_reserved
+                status_icon = "🟢" if cc_status == 'open' else "🔴"
+                st.write(f"- {status_icon} CC #{cc_id} → LOT #{lot_id}: {shares_reserved} akcji (status: {cc_status})")
+            
+            st.write(f"**RAZEM w cc_lot_mappings: {total_in_mappings} akcji**")
+            
+            # NAPRAWA - usuń mapowania dla bought_back CC
+            if st.button("🔧 USUŃ mapowania dla bought_back CC", key="clean_mappings"):
+                cursor.execute("""
+                    DELETE FROM cc_lot_mappings 
+                    WHERE cc_id IN (
+                        SELECT id FROM options_cc 
+                        WHERE status IN ('bought_back', 'expired')
+                    )
+                """)
+                
+                deleted_rows = cursor.rowcount
+                conn.commit()
+                st.success(f"✅ Usunięto {deleted_rows} mapowań dla bought_back/expired CC")
+                st.info("🔄 Teraz kliknij przycisk RESET quantity_open")
+                
+        else:
+            st.write("- Tabela cc_lot_mappings jest pusta")
+            
+        # 🔧 PRZYCISK RESET (zawsze dostępny)
+# ZAMIEŃ PRZYCISK RESET NA TEN BEZPIECZNY:
+
+        # 🔧 BEZPIECZNY PRZYCISK RESET 
+        if st.button("🔧 BEZPIECZNY RESET quantity_open", key="safe_reset_qty_open"):
+            # 1. Oblicz ile faktycznie sprzedano
+            cursor.execute("""
+                SELECT COALESCE(SUM(sts.qty_from_lot), 0)
+                FROM stock_trade_splits sts
+                WHERE sts.lot_id = ?
+            """, (lot_id,))
+            total_sold = cursor.fetchone()[0]
+            
+            # 2. Oblicz ile jest zarezerwowane pod OTWARTE CC
+            cursor.execute("""
+                SELECT COALESCE(SUM(oc.contracts * 100), 0)
+                FROM options_cc oc
+                WHERE oc.ticker = ? AND oc.status = 'open'
+            """, (ticker,))
+            total_reserved_open_cc = cursor.fetchone()[0]
+            
+            # 3. PRAWIDŁOWA FORMUŁA: total - sprzedane - otwarte_cc
+            correct_quantity_open = all_lots[0][2] - total_sold - total_reserved_open_cc
+            
+            # 4. Zabezpieczenie - nie może być ujemne
+            if correct_quantity_open < 0:
+                st.error(f"❌ BŁĄD: Masz więcej CC ({total_reserved_open_cc}) niż dostępnych akcji!")
+                st.error(f"Total: {all_lots[0][2]}, Sprzedane: {total_sold}, CC: {total_reserved_open_cc}")
+                st.error("Musisz najpierw odkupić część CC!")
+            else:
+                cursor.execute("""
+                    UPDATE lots 
+                    SET quantity_open = ? 
+                    WHERE id = ?
+                """, (correct_quantity_open, lot_id))
+                
+                conn.commit()
+                st.success(f"✅ BEZPIECZNIE zresetowano quantity_open LOT #{lot_id} na {correct_quantity_open}")
+                st.info(f"📊 Formuła: {all_lots[0][2]} (total) - {total_sold} (sprzedane) - {total_reserved_open_cc} (otwarte CC) = {correct_quantity_open}")
+                
+                if correct_quantity_open > 0:
+                    st.success(f"✅ Możesz wystawić maksymalnie {correct_quantity_open // 100} nowych CC")
+                else:
+                    st.warning("⚠️ Brak wolnych akcji - wszystkie są sprzedane lub pod CC")
+        conn.close()
+        
+    except Exception as e:
+        st.error(f"Błąd debug: {e}")
+    
+    # ... reszta oryginalnej funkcji ...
+    
+    # ... reszta oryginalnej funkcji ...
     """🔧 NAPRAWIONA: Podgląd sprzedaży CC z walidacją pokrycia"""
     st.markdown("### 🎯 Podgląd sprzedaży Covered Call")
     
@@ -412,7 +716,7 @@ def show_cc_sell_preview(form_data):
     
     # Pobierz kurs NBP D-1
     try:
-        from utils.nbp_api_client import get_usd_rate_for_date
+        from nbp_api_client import get_usd_rate_for_date
         nbp_result = get_usd_rate_for_date(sell_date)
         
         if isinstance(nbp_result, dict) and 'rate' in nbp_result:
