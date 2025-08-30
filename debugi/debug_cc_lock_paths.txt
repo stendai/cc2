@@ -1,0 +1,183 @@
+============================================================
+  📋 PODSUMOWANIE TABEL
+============================================================
+lots                       TAK
+options_cc                 TAK
+options_cc_reservations    TAK
+cc_lot_mappings            TAK
+
+============================================================
+  🔎 DIAGNOZA DLA WYBRANEGO OBIEKTU
+============================================================
+lots                       TAK
+options_cc                 TAK
+options_cc_reservations    TAK
+cc_lot_mappings            TAK
+
+============================================================
+  LOTS (wejście)
+============================================================
+id  ticker  quantity_total  quantity_open  buy_price_usd  broker_fee_usd  reg_fee_usd  buy_date    fx_rate  cost_pln     created_at           updated_at
+---+--------+----------------+---------------+---------------+----------------+-------------+------------+---------+-------------+---------------------+--------------------
+5   BASIA   100             0              150            1               0.5          2025-08-01  3.7257   55891.08855  2025-08-30 093456  2025-08-30 093456
+
+============================================================
+  OPTIONS_CC (powiązane z tickerem)
+============================================================
+id  ticker  lot_linked_id  contracts  strike_usd  premium_sell_usd  premium_buyback_usd  open_date   close_date  expiry_date  status       fx_open  fx_close  premium_sell_pln    premium_buyback_pln  pl_pln  created_at           updated_at           broker_fee_usd  reg_fee_usd  broker_fee_sell_usd  reg_fee_sell_usd  broker_fee_buyback_usd  reg_fee_buyback_usd  total_fees_sell_pln  total_fees_buyback_pln  net_premium_pln  pl_usd  parent_cc_id  chain_id
+---+--------+---------------+-----------+------------+------------------+---------------------+------------+------------+-------------+-------------+---------+----------+--------------------+---------------------+--------+---------------------+---------------------+----------------+-------------+---------------------+------------------+------------------------+---------------------+---------------------+------------------------+-----------------+--------+--------------+---------
+5   BASIA   None           1          60          5                 250                  2025-08-02  2025-08-03  2025-09-29   bought_back  3.7536   3.7536    1872.4833600000002  942.53               929.95  2025-08-30 093506  2025-08-30 093521  0               0            0                    0                 1                       0.1                  0                    4.13                    None             0       None          None 
+
+============================================================
+  OPTIONS_CC_RESERVATIONS (dla tickera)
+============================================================
+(brak wierszy)
+
+============================================================
+  CC_LOT_MAPPINGS (dla tickera)
+============================================================
+(brak wierszy)
+
+============================================================
+  PODSUMOWANIE PER LOT (rezerwymappingi vs open)
+============================================================
+LOT    5  BASIA    total= 100 open=   0  res=   0 map=   0  expected_open= 100  UNEXPLAINED_LOCK= 100
+
+============================================================
+  HEURYSTYKA DIAGNOZY
+============================================================
+• Zamknięte CC z NULL lot_linked_id → jeśli pipeline odblokowania opiera się na tym polu, to nie wie którego lotu dotyczy.
+• LOT 5 brak aktywnych blokad (0), a open100. Ktoś zdekrementował lots.quantity_open i nie cofa po buybacku.
+
+=================================================================
+  TRIGGERY  DEFINICJE SQL zawierające 'lots' i 'quantity_open'
+=================================================================
+name                  type   tbl_name  sql                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+---------------------+-------+----------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+lots                  table  lots      CREATE TABLE lots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                quantity_total INTEGER NOT NULL,
+                quantity_open INTEGER NOT NULL,
+                buy_price_usd DECIMAL(10,4) NOT NULL,
+                broker_fee_usd DECIMAL(10,2) DEFAULT 0.00,
+                reg_fee_usd DECIMAL(10,2) DEFAULT 0.00,
+                buy_date DATE NOT NULL,
+                fx_rate DECIMAL(10,6) NOT NULL,
+                cost_pln DECIMAL(15,2) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT chk_quantities CHECK (quantity_open = quantity_total),
+                CONSTRAINT chk_quantities_positive CHECK (quantity_total  0 AND quantity_open = 0)
+            )
+idx_lots_ticker_open  index  lots      CREATE INDEX idx_lots_ticker_open
+            ON lots(ticker, quantity_open) WHERE quantity_open  0
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
+
+========================================================================
+  TRIGGERY zawierające 'options_cc_reservations' lub 'cc_lot_mappings'
+========================================================================
+name                                          type     tbl_name                 sql                                                                                                                                                                                                                                                                                  
+---------------------------------------------+---------+-------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+options_cc_reservations                       table    options_cc_reservations  CREATE TABLE options_cc_reservations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cc_id INTEGER NOT NULL,
+                lot_id INTEGER NOT NULL,
+                qty_reserved INTEGER NOT NULL,
+                FOREIGN KEY(cc_id) REFERENCES options_cc(id) ON DELETE CASCADE,
+                FOREIGN KEY(lot_id) REFERENCES lots(id)
+            )
+trg_cc_release_reservations_on_status_update  trigger  options_cc               CREATE TRIGGER trg_cc_release_reservations_on_status_update
+    AFTER UPDATE OF status ON options_cc
+    WHEN NEW.status IN ('bought_back','expired','assigned')
+    BEGIN
+      DELETE FROM options_cc_reservations WHERE cc_id = NEW.id;
+    END                                                                                                                 
+trg_cc_release_reservations_on_cc_delete      trigger  options_cc               CREATE TRIGGER trg_cc_release_reservations_on_cc_delete
+    AFTER DELETE ON options_cc
+    BEGIN
+      DELETE FROM options_cc_reservations WHERE cc_id = OLD.id;
+    END                                                                                                                 
+name             type   tbl_name         sql                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+----------------+-------+-----------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+cc_lot_mappings  table  cc_lot_mappings  CREATE TABLE cc_lot_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cc_id INTEGER NOT NULL,
+                lot_id INTEGER NOT NULL,
+                shares_reserved INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cc_id) REFERENCES options_cc (id) ON DELETE CASCADE,
+                FOREIGN KEY (lot_id) REFERENCES lots (id) ON DELETE CASCADE,
+                UNIQUE(cc_id, lot_id)
+            )
+
+============================================================
+  WSZYSTKIE TRIGGERY w bazie
+============================================================
+name                                          tbl_name    sql                                                                                                                                                                                 
+---------------------------------------------+------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+trg_cc_release_reservations_on_status_update  options_cc  CREATE TRIGGER trg_cc_release_reservations_on_status_update
+    AFTER UPDATE OF status ON options_cc
+    WHEN NEW.status IN ('bought_back','expired','assigned')
+    BEGIN
+      DELETE FROM options_cc_reservations WHERE cc_id = NEW.id;
+    END
+trg_cc_release_reservations_on_cc_delete      options_cc  CREATE TRIGGER trg_cc_release_reservations_on_cc_delete
+    AFTER DELETE ON options_cc
+    BEGIN
+      DELETE FROM options_cc_reservations WHERE cc_id = OLD.id;
+    END
+
+=======================================================================
+  DEFINICJE SQL zawierające słowa kluczowe 'bought_back''close_date'
+=======================================================================
+type     name                                          tbl_name    sql                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+--------+----------------------------------------------+------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+table    options_cc                                    options_cc  CREATE TABLE options_cc (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                lot_linked_id INTEGER,
+                contracts INTEGER NOT NULL,
+                strike_usd DECIMAL(10,4) NOT NULL,
+                premium_sell_usd DECIMAL(10,4) NOT NULL,
+                premium_buyback_usd DECIMAL(10,4),
+                open_date DATE NOT NULL,
+                close_date DATE,
+                expiry_date DATE NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                fx_open DECIMAL(10,6) NOT NULL,
+                fx_close DECIMAL(10,6),
+                premium_sell_pln DECIMAL(15,2) NOT NULL,
+                premium_buyback_pln DECIMAL(15,2),
+                pl_pln DECIMAL(15,2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, broker_fee_usd DECIMAL(10,2) DEFAULT 0.00, reg_fee_usd DECIMAL(10,2) DEFAULT 0.00, broker_fee_sell_usd DECIMAL(10,2) DEFAULT 0.00, reg_fee_sell_usd DECIMAL(10,2) DEFAULT 0.00, broker_fee_buyback_usd DECIMAL(10,2) DEFAULT 0.00, reg_fee_buyback_usd DECIMAL(10,2) DEFAULT 0.00, total_fees_sell_pln DECIMAL(15,2) DEFAULT 0.00, total_fees_buyback_pln DECIMAL(15,2) DEFAULT 0.00, net_premium_pln DECIMAL(15,2), pl_usd DECIMAL(15,2) DEFAULT 0.00, parent_cc_id INTEGER, chain_id INTEGER NULL
+            REFERENCES cc_chains(id) ON DELETE SET NULL,
+                FOREIGN KEY (lot_linked_id) REFERENCES lots(id),
+                CONSTRAINT chk_contracts_positive CHECK (contracts  0),
+                CONSTRAINT chk_status CHECK (status IN ('open', 'expired', 'bought_back'))
+            )
+trigger  trg_cc_release_reservations_on_status_update  options_cc  CREATE TRIGGER trg_cc_release_reservations_on_status_update
+    AFTER UPDATE OF status ON options_cc
+    WHEN NEW.status IN ('bought_back','expired','assigned')
+    BEGIN
+      DELETE FROM options_cc_reservations WHERE cc_id = NEW.id;
+    END                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+Masz rację — to nie jest kwestia „czy się nie ustawia”, tylko dlaczego. Z Twojego dumpu wynika jasno:
+
+lots.quantity_open = 0, mimo że nie ma aktywnych rezerwacji (options_cc_reservations) ani mapowań (cc_lot_mappings) → UNEXPLAINED_LOCK = 100.
+
+Jedyny trigger przy buybacku to:
+AFTER UPDATE OF status ON options_cc … DELETE FROM options_cc_reservations WHERE cc_id = NEW.id;
+Nie ma żadnego triggera (ani kodu w DB), który zwiększa lots.quantity_open po zwolnieniu rezerwacji.
+
+Dla tego CC lot_linked_id = NULL. Jeśli w aplikacji odblokowanie lota zależy od lot_linked_id, to ta ścieżka nie wykona się.
+
+Czyli przy sprawnym buybacku pipeline robi tylko:
+
+options_cc.status → bought_back,
+
+trigger kasuje rezerwacje,
+…i na tym koniec. lots.quantity_open zostaje zaniżone, a UI widzi „Under CC / Nieznany”, bo liczba otwartych akcji w lots < quantity_total, ale nie znajdzie już CC (bo rezerwacje skasowano).
+
+Żeby to udowodnić „na żywo” i złapać konkretny brakujący krok, daję Ci read-only instrumentację na bazie, która loguje co się dzieje podczas buybacku (bez zmiany danych biznesowych):                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     

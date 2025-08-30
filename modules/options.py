@@ -75,9 +75,46 @@ def show_options():
 def show_sell_cc_tab():
     
     st.subheader("🎯 Sprzedaż Covered Calls")
-    
+
+def get_available_lots_for_cc():
+    """Pobiera LOT-y z quantity_open >= 100 (min 1 kontrakt CC)"""
+    try:
+        conn = db.get_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, ticker, quantity_open, buy_date, buy_price_usd
+            FROM lots 
+            WHERE quantity_open >= 100
+            ORDER BY ticker, buy_date, id
+        """)
+        
+        lots = cursor.fetchall()
+        conn.close()
+        
+        # Format: [(lot_id, display_text, ticker, quantity_open)]
+        lot_options = []
+        for lot in lots:
+            lot_id, ticker, qty_open, buy_date, buy_price = lot
+            max_contracts = qty_open // 100
+            
+            display_text = (f"LOT #{lot_id}: {ticker} - {qty_open} akcji "
+                          f"({max_contracts} CC) @ ${buy_price:.2f} [{buy_date}]")
+            
+            lot_options.append((lot_id, display_text, ticker, qty_open))
+        
+        return lot_options
+        
+    except Exception as e:
+        st.error(f"Błąd pobierania LOT-ów: {e}")
+        return []
+
+
 def show_sell_cc_tab():
-    """Tab sprzedaży Covered Calls - ROZSZERZONY O POPRAWIONY PRZYCISK"""
+    """Tab sprzedaży Covered Calls - POPRAWIONE BŁĘDY"""
     st.subheader("🎯 Sprzedaż Covered Calls")
     
     # ===== ZAKTUALIZOWANY PRZYCISK ZWALNIANIA =====
@@ -147,36 +184,30 @@ def show_sell_cc_tab():
     st.markdown("---")
     # ===== KONIEC ZAKTUALIZOWANEGO PRZYCISKU =====
     
-    # ... reszta funkcji bez zmian ...
-    """Tab sprzedaży Covered Calls - PUNKTY 53-54: Kompletny formularz"""
-    st.subheader("🎯 Sprzedaż Covered Calls")
-    st.success("✅ **PUNKTY 53-54 UKOŃCZONE** - Formularz sprzedaży CC z zapisem")
-    
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.markdown("### 📝 Formularz sprzedaży CC")
         
-        # Pobierz dostępne tickery do wyboru
-        available_tickers = get_available_tickers_for_cc()
+        # Pobierz dostępne LOT-y do wyboru
+        available_lots = get_available_lots_for_cc()
         
-        if not available_tickers:
-            st.error("❌ **Brak akcji dostępnych do pokrycia CC**")
-            st.info("💡 Dodaj LOT-y akcji w module Stocks przed sprzedażą CC")
+        if not available_lots:
+            st.error("❌ **Brak LOT-ów dostępnych do pokrycia CC**")
+            st.info("💡 Potrzebujesz co najmniej 100 wolnych akcji w jednym LOT-cie")
             return
         
         # FORMULARZ SPRZEDAŻY CC
         with st.form("sell_cc_form"):
             st.info("💡 **1 kontrakt CC = 100 akcji pokrycia**")
             
-            # Wybór tickera z dropdowna
-            ticker_options = [f"{ticker} ({shares} akcji → {shares//100} kontraktów)" 
-                            for ticker, shares in available_tickers]
+            # 🆕 Wybór LOT-a z dropdowna
+            lot_options = [lot[1] for lot in available_lots]  # display_text
             
-            selected_ticker_option = st.selectbox(
-                "Ticker akcji:",
-                options=ticker_options,
-                help="Wybierz akcje do pokrycia covered call"
+            selected_lot_option = st.selectbox(
+                "🎯 Wybierz LOT do pokrycia:",
+                options=lot_options,
+                help="Wybierz konkretny LOT akcji do rezerwacji pod CC"
             )
             
             col_dates1, col_dates2 = st.columns(2)
@@ -193,60 +224,81 @@ def show_sell_cc_tab():
                     value=date.today() + timedelta(days=30)
                 )
             
-                
+            # 🔧 POPRAWKA: Wyciągnij dane wybranego LOT-a
+            selected_lot_data = None
+            ticker = None  # 🔧 INICJALIZACJA
+            lot_id = None  # 🔧 INICJALIZACJA
+            max_contracts = 1  # 🔧 DOMYŚLNA WARTOŚĆ
             
-            # Wyciągnij ticker z opcji
-            # I ZAMIEŃ je NA:
-            selected_ticker = selected_ticker_option.split(' ')[0] if selected_ticker_option else None
-
-            # 🔧 NAPRAWKA: Sprawdź dostępność na datę CC
-            if selected_ticker and sell_date:
-                # Używaj naprawionej funkcji chronologii
-                test_coverage = db.check_cc_coverage_with_chronology(selected_ticker, 10, sell_date)
-                max_contracts_on_date = test_coverage.get('shares_available', 0) // 100
+            if selected_lot_option:
+                selected_lot_data = next(
+                    (lot for lot in available_lots if lot[1] == selected_lot_option), 
+                    None
+                )
+            
+            if selected_lot_data:
+                lot_id, _, ticker, qty_open = selected_lot_data
+                max_contracts = qty_open // 100
                 
-                if max_contracts_on_date > 0:
-                    st.success(f"✅ Na {sell_date}: dostępne {test_coverage.get('shares_available')} akcji = max {max_contracts_on_date} kontraktów")
-                else:
-                    st.error(f"❌ Na {sell_date}: brak dostępnych akcji {selected_ticker}")
-                    debug_info = test_coverage.get('debug_info', {})
-                    st.error(f"   Posiadane: {debug_info.get('owned_on_date', 0)}")
-                    st.error(f"   Sprzedane przed: {debug_info.get('sold_before', 0)}")
-                    st.error(f"   Zarezerwowane przed: {debug_info.get('cc_reserved_before', 0)}")
-            else:
-                max_contracts_on_date = 1
+                # Pokazuj info o wybranym LOT-cie
+                st.info(f"📊 **LOT #{lot_id}**: {ticker} - {qty_open} akcji (max {max_contracts} CC)")
+
+            # 🔧 POPRAWKA: Sprawdź dostępność na datę CC (tylko jeśli ticker istnieje)
+            max_contracts_on_date = max_contracts  # 🔧 UŻYJ WARTOŚCI Z LOT-A
+            
+            if ticker and sell_date:  # 🔧 ZMIENIONE Z selected_ticker NA ticker
+                try:
+                    # Używaj naprawionej funkcji chronologii
+                    test_coverage = db.check_cc_coverage_with_chronology(ticker, 10, sell_date)
+                    max_contracts_on_date = test_coverage.get('shares_available', 0) // 100
+                    
+                    if max_contracts_on_date > 0:
+                        st.success(f"✅ Na {sell_date}: dostępne {test_coverage.get('shares_available')} akcji = max {max_contracts_on_date} kontraktów")
+                    else:
+                        st.error(f"❌ Na {sell_date}: brak dostępnych akcji {ticker}")
+                        debug_info = test_coverage.get('debug_info', {})
+                        st.error(f"   Posiadane: {debug_info.get('owned_on_date', 0)}")
+                        st.error(f"   Sprzedane przed: {debug_info.get('sold_before', 0)}")
+                        st.error(f"   Zarezerwowane przed: {debug_info.get('cc_reserved_before', 0)}")
+                except Exception as e:
+                    st.warning(f"⚠️ Nie można sprawdzić pokrycia: {e}")
+                    max_contracts_on_date = max_contracts
 
             col_form1, col_form2 = st.columns(2)
             
             with col_form1:
-                # 🔧 NAPRAWIONA walidacja kontraktów
+                # 🔧 NAPRAWIONA walidacja kontraktów - BEZPIECZNE WARTOŚCI
+                safe_max_value = max(1, min(max_contracts, max_contracts_on_date)) if ticker else 10
+                safe_value = min(1, safe_max_value) if ticker else 1
+                
                 contracts = st.number_input(
                     "Liczba kontraktów CC:",
                     min_value=1,
-                    max_value=max(1, max_contracts_on_date) if selected_ticker and sell_date else 10,
-                    value=min(3, max_contracts_on_date) if max_contracts_on_date >= 3 else 1,
-                    help=f"Na {sell_date}: maksymalnie {max_contracts_on_date} kontraktów" if selected_ticker and sell_date else "Wybierz datę i ticker"
+                    max_value=safe_max_value,
+                    value=safe_value,
+                    help=f"LOT #{lot_id}: max {max_contracts}, na {sell_date}: max {max_contracts_on_date}" if ticker else "Wybierz LOT"
                 )
                 
-                # Strike price (bez zmian)
+                # Strike price
                 strike_price = st.number_input(
                     "Strike price USD:",
                     min_value=0.01,
-                    value=60.00,  # 🔧 Ustaw na Twoją wartość
+                    value=60.00,
                     step=0.01,
                     format="%.2f"
                 )
             
             with col_form2:
-                # Premium (bez zmian)
+                # Premium
                 premium_received = st.number_input(
                     "Premium otrzymana USD:",
                     min_value=0.01,
-                    value=5.00,  # 🔧 Ustaw na Twoją wartość
+                    value=5.00,
                     step=0.01,
                     format="%.2f"
                 )
-                        # ✅ DODAJ PROWIZJE W OSOBNEJ SEKCJI:
+            
+            # ✅ PROWIZJE
             st.markdown("**💰 Prowizje brokerskie:**")
             col_fee1, col_fee2 = st.columns(2)
 
@@ -270,16 +322,18 @@ def show_sell_cc_tab():
                     help="Regulatory fees (SEC, FINRA)"
                 )
 
-
-
-            
-            # Przycisk sprawdzenia pokrycia
-            check_coverage = st.form_submit_button("🔍 Sprawdź pokrycie i podgląd", use_container_width=True)
+            # 🔧 SUBMIT BUTTON - KONIECZNIE W FORMULARZU!
+            submitted_cc = st.form_submit_button(
+                "🔍 Sprawdź pokrycie i podgląd", 
+                type="primary",
+                use_container_width=True
+            )
         
-        # SPRAWDZENIE POKRYCIA - POZA FORMEM
-        if check_coverage and selected_ticker and contracts:
+        # 🔧 SPRAWDZENIE POKRYCIA - POZA FORMEM (poprawione warunki)
+        if submitted_cc and ticker and contracts:  # 🔧 ZMIENIONE NAZWĘ ZMIENNEJ
             st.session_state.cc_form_data = {
-                'ticker': selected_ticker,
+                'lot_id': lot_id,  # 🔧 TERAZ JEST ZDEFINIOWANE
+                'ticker': ticker,
                 'contracts': contracts,
                 'strike_price': strike_price,
                 'premium_received': premium_received,
@@ -291,39 +345,42 @@ def show_sell_cc_tab():
             st.session_state.show_cc_preview = True
     
     with col2:
-        st.markdown("### 📊 Dostępne akcje")
+        st.markdown("### 📊 Dostępne LOT-y")
         
-        # Pokaż tabelę dostępnych akcji
-        if available_tickers:
-            ticker_data = []
-            for ticker, shares in available_tickers:
-                max_cc = shares // 100
-                ticker_data.append({
+        # 🔧 POPRAWKA: Pokaż tabelę LOT-ów (nie tickerów)
+        if available_lots:
+            lot_data = []
+            for lot_id, display_text, ticker, qty_open in available_lots:
+                max_cc = qty_open // 100
+                lot_data.append({
+                    'LOT ID': lot_id,
                     'Ticker': ticker,
-                    'Akcje': f"{shares:,}",
+                    'Akcje': f"{qty_open:,}",
                     'Max CC': max_cc,
                     'Status': "✅ Dostępne" if max_cc > 0 else "⚠️ Za mało"
                 })
             
-            st.dataframe(ticker_data, use_container_width=True)
+            st.dataframe(lot_data, use_container_width=True)
         
         # Statystyki CC
         st.markdown("### 🎯 Statystyki CC")
-        cc_stats = db.get_cc_reservations_summary()
-        
-        if cc_stats.get('open_cc_count', 0) > 0:
-            st.write(f"📊 **Otwarte CC**: {cc_stats['open_cc_count']}")
-            st.write(f"🎯 **Kontrakty**: {cc_stats['total_contracts']}")
-            st.write(f"📦 **Zarezerwowane**: {cc_stats['shares_reserved']} akcji")
-        else:
-            st.info("💡 Brak otwartych pozycji CC")
+        try:
+            cc_stats = db.get_cc_reservations_summary()
+            
+            if cc_stats.get('open_cc_count', 0) > 0:
+                st.write(f"📊 **Otwarte CC**: {cc_stats['open_cc_count']}")
+                st.write(f"🎯 **Kontrakty**: {cc_stats['total_contracts']}")
+                st.write(f"📦 **Zarezerwowane**: {cc_stats['shares_reserved']} akcji")
+            else:
+                st.info("💡 Brak otwartych pozycji CC")
+        except Exception as e:
+            st.error(f"❌ Błąd statystyk: {e}")
     
     # PODGLĄD CC - POZA KOLUMNAMI
     if 'show_cc_preview' in st.session_state and st.session_state.show_cc_preview:
         if 'cc_form_data' in st.session_state:
             st.markdown("---")
             show_cc_sell_preview(st.session_state.cc_form_data)
-    
     
 
 def get_available_tickers_for_cc():
@@ -804,6 +861,7 @@ def show_cc_sell_preview(form_data):
     
     # Przygotuj dane do zapisu
     cc_data = {
+        'lot_id': form_data.get('lot_id'),
         'ticker': ticker,
         'contracts': contracts,
         'strike_usd': strike_price,
@@ -1032,16 +1090,11 @@ def show_buyback_expiry_tab():
                                     col_res1, col_res2 = st.columns(2)
                                     
                                     with col_res1:
-                                        st.write(f"**Kontrakty odkupione:** {result['contracts_bought_back']}")
-                                        if result.get('contracts_remaining', 0) > 0:
-                                            st.write(f"**Kontrakty pozostałe:** {result['contracts_remaining']}")
-                                        st.write(f"**Akcje zwolnione:** {result['shares_released']}")
-                                        st.write(f"**LOT-y zaktualizowane:** {result.get('lots_updated', 0)}")
+                                        st.write(f"**Koszt buyback (PLN):** {result.get('total_buyback_cost_pln', 0):,.2f} zł")
+                                        st.write(f"**P/L (PLN):** {result.get('pl_pln', 0):+,.2f} zł")  # + pokazuje znak
+                                        st.write(f"**Akcje zwolnione:** {result.get('shares_released_from_mappings', 0)}")
+                                        st.write(f"**Kontrakty odkupione:** {result.get('contracts_bought_back', 0)}")
                                     
-                                    with col_res2:
-                                        st.write(f"**Premium otrzymana (PLN):** {format_currency_pln(result['premium_received_pln'])}")
-                                        st.write(f"**Koszt buyback (PLN):** {format_currency_pln(result['buyback_cost_pln'])}")
-                                        st.write(f"**Prowizje (USD):** ${result['total_fees_usd']:.2f}")
                                         
                                         # P/L z kolorami
                                         pl_pln = result['pl_pln']

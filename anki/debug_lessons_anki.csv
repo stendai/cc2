@@ -1,0 +1,31 @@
+Front,Back
+Po buybacku CC quantity_open=0 mimo braku rezerwacji – co to oznacza?,"Ghost-lock: brak mechanizmu podbijającego lots.quantity_open po release, zwykle przez lot_linked_id=NULL lub brak triggera release."
+Dlaczego instaluję triggery dbg_res_insert/dbg_res_delete w moim projekcie?,"Żeby logować w DB momenty rezerwacji i zwolnienia – inaczej nie widzę, co faktycznie się dzieje."
+Dlaczego UI pokazuje status 'Nieznany' przy akcjach BASIA?,"JOIN był po lot_linked_id, które było NULL. Widok powinien liczyć blokady na podstawie rezerwacji."
+Czym jest ghost-lock w mojej aplikacji?,"Sytuacja, gdy quantity_open < quantity_total, a rezerwacje i mapowania = 0."
+Jak wykrywam ghost-locka?,Porównuję quantity_total - quantity_open z sumą aktywnych rezerwacji i mapowań. Jeśli różnica > 0 → ghost-lock.
+Po co instaluję triggery dbg_cc_status_update?,Żeby logować zmianę statusu CC (np. open → bought_back) wraz z lot_linked_id.
+Dlaczego lot_linked_id=NULL jest problemem?,"Bo pipeline 'release' oparty na tym polu się nie wykonuje – system nie wie, który lot odblokować."
+Na czym powinna opierać się logika blokad w mojej aplikacji?,"Na tabeli options_cc_reservations (faktyczne rezerwacje), nie na lot_linked_id."
+Co robi trigger trg_cc_release_reservations_on_status_update?,Kasuje rezerwacje CC po zmianie statusu na bought_back/expired/assigned.
+Dlaczego ten trigger nie wystarcza?,"Bo tylko kasuje rezerwacje, ale nie podbija lots.quantity_open – trzeba dodatkowego triggera release."
+Jakie dwa nowe triggery spójności trzeba dodać?,trg_lots_open_on_reserve (zmniejsza open) i trg_lots_open_on_release (zwiększa open).
+Kiedy działa trg_lots_open_on_reserve?,Po INSERT rezerwacji – zmniejsza quantity_open o qty_reserved.
+Kiedy działa trg_lots_open_on_release?,Po DELETE rezerwacji – zwiększa quantity_open o qty_reserved.
+Dlaczego UI nie powinno bazować na statusie CC?,"Bo status może być 'bought_back', ale rezerwacje nie odzwierciedlają tego. Prawdziwy stan daje suma rezerwacji."
+Jak sprawdzam wszystkie triggery w SQLite?,"SELECT name, sql FROM sqlite_master WHERE type='trigger';"
+Jak szukam triggerów dotykających quantity_open?,SELECT * FROM sqlite_master WHERE sql LIKE '%quantity_open%';
+Co wypisuje cc_buyback_debug w sekcji 'PODSUMOWANIE LOTÓW TICKERA'?,"Dla każdego lotu: total, open, sum rezerwacji, sum mapowań, oraz UNEXPLAINED_LOCK."
+Jak interpretować UNEXPLAINED_LOCK=100 dla lotu?,Znaczy że 100 akcji jest 'zablokowanych' bez rezerwacji ani mapowania → ghost-lock.
+Dlaczego dodałem argument --ticker do cc_unlock_probe?,"Żeby filtrować logi nie tylko po cc_id, ale też po tickerze."
+Co daje trigger dbg_lots_open_update?,Loguje każdą zmianę quantity_open – pozwala udowodnić brak inkrementacji po buybacku.
+Dlaczego ważne jest logowanie old_status i new_status w cc_status_update?,"Bo pokazuje dokładnie, kiedy CC zmieniło się np. z open → bought_back."
+Co pokazuje pole 'note' w debug_log?,"Dodatkowy kontekst – np. 'release', 'reserve', 'lot_linked_id=NULL'."
+Jak zabezpieczyć się przed rezerwacją większą niż open?,Trigger BEFORE INSERT sprawdzający quantity_open >= qty_reserved (guard).
+Jak zabezpieczyć się przed quantity_open<0?,Trigger AFTER UPDATE na lots z RAISE(ABORT) jeśli quantity_open < 0 lub > total.
+Dlaczego ghost-lock był niewidoczny w UI na początku?,"Bo UI opierało się na LEFT JOIN i statusach, które zostawiały 'Nieznany'."
+Czego nauczyło mnie debugowanie ghost-locka?,"Że root cause nie zawsze jest w danych, tylko w braku mechanizmu release."
+Dlaczego rezerwacje są 'źródłem prawdy'?,"Bo to one dokładnie wskazują, które akcje są pod CC, niezależnie od statusów i linków."
+Dlaczego nie powinienem ręcznie ustawiać quantity_open=100?,"Bo to obejście – trzeba, żeby open było spójne z rezerwacjami automatycznie."
+Jak sprawdzić sumę rezerwacji dla lota?,SELECT SUM(qty_reserved) FROM options_cc_reservations WHERE lot_id=?;
+Jaki jest mój biznesowy wniosek po tym debugowaniu?,Użytkownik musi sam wybierać loty przy SELL i BUYBACK CC – system nie może zgadywać.
