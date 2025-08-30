@@ -1,0 +1,1 @@
+C:\Users\noguriscan\opcje3>findstr /s /i "get_lots_for_tax_fifo" *.py
