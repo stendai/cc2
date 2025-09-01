@@ -20,10 +20,7 @@ def show_options():
     """Główna funkcja modułu Options - PUNKT 67: CLEANUP UI"""
     
     st.header("🎯 Options - Covered Calls")
-    st.markdown("*Profesjonalne zarządzanie opcjami pokrytymi z rezerwacjami FIFO*")
-    
-    # CLEANUP: Usunięto deweloperskie komunikaty success
-    # st.success("🚀 **PUNKTY 51-56 UKOŃCZONE** - Sprzedaż, buyback i expiry CC!")
+    st.markdown("*Profesjonalne zarządzanie opcjami pokrytymi z rezerwacjami FIFO*")    
     
     # Status systemu (uproszczony)
     try:
@@ -49,12 +46,11 @@ def show_options():
         st.error(f"❌ Błąd systemu: {e}")
     
     # CLEANUP: Zakładki bez zmian (już zrobione w punkcie 65)
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "🎯 Sprzedaż CC", 
         "💰 Buyback & Expiry", 
         "📊 Otwarte CC", 
         "📋 Historia CC",
-        "🛠️ Diagnostyka"
     ])
     
     with tab1:
@@ -69,9 +65,6 @@ def show_options():
     with tab4:
         show_cc_history_tab()  # Nowa wersja z PUNKT 67
         
-    with tab5:
-        show_reservations_diagnostics_tab()
-
 def show_sell_cc_tab():
     
     st.subheader("🎯 Sprzedaż Covered Calls")
@@ -117,72 +110,7 @@ def show_sell_cc_tab():
     """Tab sprzedaży Covered Calls - POPRAWIONE BŁĘDY"""
     st.subheader("🎯 Sprzedaż Covered Calls")
     
-    # ===== ZAKTUALIZOWANY PRZYCISK ZWALNIANIA =====
-    st.markdown("---")
-    col_tools1, col_tools2, col_tools3 = st.columns([2, 2, 1])
-    
-    with col_tools1:
-        st.markdown("### 🔓 Narzędzia zarządzania")
-        if st.button("🔓 Zwolnij odkupione opcje", key="release_bought_back_cc", 
-                     help="Zwalnia akcje z bought_back CC (obie tabele)"):
-            with st.spinner("Zwalnianie akcji z odkupionych CC..."):
-                try:
-                    result = db.mass_fix_bought_back_cc_reservations()
-                    
-                    if result['success']:
-                        fixed_count = result.get('fixed_count', 0)
-                        shares_released = result.get('shares_released', 0)
-                        
-                        if fixed_count > 0:
-                            st.success(f"✅ {result['message']}")
-                            st.balloons()
-                        else:
-                            st.info("ℹ️ Wszystkie akcje już są prawidłowo zwolnione")
-                    else:
-                        st.error(f"❌ Błąd zwalniania: {result.get('message', 'Nieznany błąd')}")
-                        
-                except Exception as e:
-                    st.error(f"❌ Błąd systemu: {str(e)}")
-    
-    with col_tools2:
-        # Zaktualizowany status check
-        if st.button("🔍 Sprawdź status CC", key="check_cc_status"):
-            try:
-                status = db.get_blocked_cc_status()
-                
-                if 'error' in status:
-                    st.error(f"❌ {status['error']}")
-                elif status['has_problems']:
-                    st.warning(f"⚠️ {status['blocked_cc_count']} CC blokuje {status['blocked_shares']} akcji")
-                    for detail in status['details']:
-                        st.caption(f"• {detail}")
-                else:
-                    st.success("✅ Wszystkie odkupione CC są prawidłowo zwolnione")
-                    
-            except Exception as e:
-                st.error(f"❌ Błąd sprawdzania: {str(e)}")
-    
-    with col_tools3:
-        # Zaktualizowany status indicator
-        try:
-            status = db.get_blocked_cc_status()
-            
-            if 'error' in status:
-                st.error("❌")
-                st.caption("Błąd sprawdzania")
-            elif status['has_problems']:
-                st.error(f"⚠️ {status['blocked_cc_count']}")
-                st.caption("Zablokowanych CC")
-            else:
-                st.success("✅ OK")
-                st.caption("Wszystkie zwolnione")
-                
-        except:
-            st.info("❓")
-            st.caption("Sprawdź status")
-    
-    st.markdown("---")
-    # ===== KONIEC ZAKTUALIZOWANEGO PRZYCISKU =====
+
     
     col1, col2 = st.columns([1, 1])
     
@@ -411,312 +339,11 @@ def get_available_tickers_for_cc():
         st.error(f"Błąd pobierania tickerów: {e}")
         return []
 
-# DODAJ DO OPCJI DEBUG w show_cc_sell_preview (zamiast skomplikowanego debug)
-
-# DODAJ DO OPCJI DEBUG w show_cc_sell_preview (zamiast skomplikowanego debug)
 
 def show_cc_sell_preview(form_data):
-    import streamlit as st  # 🔧 NAPRAWKA importu
+    """Podgląd sprzedaży Covered Call z walidacją pokrycia"""
+    import streamlit as st
     
-    st.markdown("### 🎯 Podgląd sprzedaży Covered Call")
-    
-    ticker = form_data['ticker']
-    contracts = form_data['contracts']
-    sell_date = form_data['sell_date']
-    
-    # 🔍 PROSTY DEBUG - sprawdź bezpośrednio w bazie
-    st.markdown("### 🚨 DEBUG: Sprawdzenie bazy danych")
-    
-    try:
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # 🔧 ZDEFINIUJ WSZYSTKIE ZMIENNE NA POCZĄTKU
-        total_reserved = 0
-        total_sold_before = 0
-        total_on_date = 0
-        
-        # 1. Wszystkie LOT-y tego tickera
-        cursor.execute("""
-            SELECT id, buy_date, quantity_total, quantity_open, buy_price_usd
-            FROM lots 
-            WHERE ticker = ? 
-            ORDER BY buy_date, id
-        """, (ticker,))
-        
-        all_lots = cursor.fetchall()
-        st.write(f"**🔍 Wszystkie LOT-y {ticker}:**")
-        for lot in all_lots:
-            lot_id, buy_date, qty_total, qty_open, buy_price = lot
-            st.write(f"- LOT #{lot_id}: kup {buy_date}, total={qty_total}, open={qty_open}, cena=${buy_price}")
-        
-        # 2. Sprawdź które LOT-y były dostępne na 1 sierpnia
-        cursor.execute("""
-            SELECT id, buy_date, quantity_total, quantity_open 
-            FROM lots 
-            WHERE ticker = ? AND buy_date <= ?
-            ORDER BY buy_date, id
-        """, (ticker, sell_date))
-        
-        lots_on_date = cursor.fetchall()
-        st.write(f"**📅 LOT-y dostępne na {sell_date}:**")
-        for lot in lots_on_date:
-            lot_id, buy_date, qty_total, qty_open = lot
-            total_on_date += qty_total  # 🔧 UŻYWAJ JUŻ ZDEFINIOWANEJ ZMIENNEJ
-            st.write(f"- LOT #{lot_id}: {buy_date} → {qty_total} akcji")
-        
-        st.success(f"✅ **RAZEM na {sell_date}: {total_on_date} akcji**")
-        
-        # 3. Sprawdź sprzedaże PRZED datą CC
-        cursor.execute("""
-            SELECT st.sell_date, sts.qty_from_lot, sts.lot_id
-            FROM stock_trades st
-            JOIN stock_trade_splits sts ON st.id = sts.trade_id
-            JOIN lots l ON sts.lot_id = l.id
-            WHERE l.ticker = ? AND st.sell_date < ?
-            ORDER BY st.sell_date
-        """, (ticker, sell_date))
-        
-        sells_before = cursor.fetchall()
-        st.write(f"**💸 Sprzedaże przed {sell_date}:**")
-        for sell in sells_before:
-            sell_date_db, qty_sold, lot_id = sell
-            total_sold_before += qty_sold  # 🔧 UŻYWAJ JUŻ ZDEFINIOWANEJ ZMIENNEJ
-            st.write(f"- {sell_date_db}: sprzedano {qty_sold} z LOT #{lot_id}")
-        
-        # 4. Sprawdź WSZYSTKIE CC (nie tylko przed datą)
-        cursor.execute("""
-            SELECT id, open_date, contracts, expiry_date, status
-            FROM options_cc 
-            WHERE ticker = ?
-            ORDER BY open_date
-        """, (ticker,))
-        
-        cc_before = cursor.fetchall()
-        st.write(f"**🎯 WSZYSTKIE CC {ticker}:**")
-        total_cc_shares_before = 0
-        for cc in cc_before:
-            cc_id, open_date, contracts, expiry_date, status = cc
-            cc_shares = contracts * 100
-            total_cc_shares_before += cc_shares
-            st.write(f"- CC #{cc_id}: {open_date} → {contracts} kontr. ({cc_shares} akcji), status={status}")
-        
-        # PODSUMOWANIE
-        available_on_date = total_on_date - total_sold_before - total_reserved  # Używaj total_reserved
-        
-        st.markdown("---")
-        st.markdown("### 📊 PODSUMOWANIE:")
-        st.write(f"🏪 **Posiadane na {sell_date}**: {total_on_date} akcji")
-        st.write(f"💸 **Sprzedane przed**: {total_sold_before} akcji") 
-        st.write(f"📦 **FAKTYCZNIE zarezerwowane**: {total_reserved} akcji")
-        st.write(f"🔢 **quantity_open w LOT-ie**: {all_lots[0][3] if all_lots else 0}")
-        st.write(f"✅ **DOSTĘPNE**: {available_on_date} akcji")
-        st.write(f"🎯 **POTRZEBNE**: {contracts * 100} akcji")
-        
-        if available_on_date >= contracts * 100:
-            st.success(f"✅ **WYSTARCZY!** Można wystawić {contracts} CC")
-        else:
-            st.error(f"❌ **BRAKUJE** {contracts * 100 - available_on_date} akcji")
-        
-        # 🚨 PRZYCISK NAPRAWCZY
-        st.markdown("---")
-        if st.button("🔧 NAPRAW bought_back CC - zwolnij zablokowane akcje", key="fix_bought_back"):
-            with st.spinner("Naprawianie bought_back CC..."):
-                try:
-                    # Znajdź wszystkie bought_back CC które nadal mają rezerwacje
-                    cursor.execute("""
-                        SELECT DISTINCT ocr.cc_id
-                        FROM options_cc_reservations ocr
-                        JOIN options_cc oc ON ocr.cc_id = oc.id
-                        WHERE oc.status IN ('bought_back', 'expired')
-                    """)
-                    
-                    bad_cc_ids = [row[0] for row in cursor.fetchall()]
-                    fixed_count = 0
-                    
-                    for cc_id in bad_cc_ids:
-                        # Pobierz rezerwacje dla tego CC
-                        cursor.execute("""
-                            SELECT lot_id, qty_reserved
-                            FROM options_cc_reservations
-                            WHERE cc_id = ?
-                        """, (cc_id,))
-                        
-                        reservations_to_fix = cursor.fetchall()
-                        
-                        for lot_id, qty_reserved in reservations_to_fix:
-                            # Zwolnij akcje w LOT-ie
-                            cursor.execute("""
-                                UPDATE lots 
-                                SET quantity_open = quantity_open + ?
-                                WHERE id = ?
-                            """, (qty_reserved, lot_id))
-                        
-                        # Usuń rezerwacje
-                        cursor.execute("""
-                            DELETE FROM options_cc_reservations
-                            WHERE cc_id = ?
-                        """, (cc_id,))
-                        
-                        fixed_count += 1
-                    
-                    conn.commit()
-                    st.success(f"✅ Naprawiono {fixed_count} bought_back/expired CC!")
-                    st.info("🔄 Odśwież stronę aby zobaczyć zmiany")
-                    
-                except Exception as e:
-                    conn.rollback()
-                    st.error(f"Błąd naprawki: {e}")
-        # DODAJ TO w debug sekcji ZARAZ PO "🚨 PRZYCISK NAPRAWCZY" 
-
-        # 🔍 DODATKOWA DIAGNOSTYKA - dlaczego quantity_open=0?
-        st.markdown("### 🔍 DLACZEGO quantity_open=0?")
-        
-        # Sprawdź czy istnieje inna tabela mapowań
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name LIKE '%mapping%' OR name LIKE '%reservation%'
-        """)
-        mapping_tables = cursor.fetchall()
-        st.write("**Tabele mapowań w bazie:**", [t[0] for t in mapping_tables])
-        
-        # Sprawdź historię quantity_open tego LOT-a
-        lot_id = all_lots[0][0] if all_lots else None
-        if lot_id:
-            st.write(f"**Historia LOT #{lot_id}:**")
-            st.write(f"- quantity_total: {all_lots[0][2]}")
-            st.write(f"- quantity_open: {all_lots[0][3]}")
-            
-            # Sprawdź sprzedaże z tego LOT-a
-            cursor.execute("""
-                SELECT sts.trade_id, sts.qty_from_lot, st.sell_date
-                FROM stock_trade_splits sts
-                JOIN stock_trades st ON sts.trade_id = st.id
-                WHERE sts.lot_id = ?
-                ORDER BY st.sell_date
-            """, (lot_id,))
-            
-            lot_sales = cursor.fetchall()
-            total_sold_from_lot = sum(sale[1] for sale in lot_sales)
-            st.write(f"**Sprzedaże z LOT #{lot_id}:**")
-            for sale in lot_sales:
-                st.write(f"- Trade #{sale[0]}: sprzedano {sale[1]} na {sale[2]}")
-            st.write(f"- **RAZEM sprzedane**: {total_sold_from_lot}")
-            
-            # OBLICZ co POWINNO być w quantity_open
-            expected_open = all_lots[0][2] - total_sold_from_lot  # total - sprzedane
-            actual_open = all_lots[0][3]
-            difference = expected_open - actual_open
-            
-            st.write(f"**ANALIZA:**")
-            st.write(f"- Powinno być quantity_open: {expected_open}")  
-            st.write(f"- Faktycznie jest: {actual_open}")
-            st.write(f"- **RÓŻNICA: {difference}** ← To jest zablokowane pod CC!")
-            
-            if difference > 0:
-                st.error(f"❌ **{difference} akcji jest gdzieś zablokowane ale nie widać gdzie!**")
-                
-
-                
-        # Sprawdź czy są jakieś inne dziwne tabele
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        all_tables = [t[0] for t in cursor.fetchall()]
-        st.write("**Wszystkie tabele:**", all_tables)
-        # DODAJ TO w debug sekcji ZARAZ PO "Wszystkie tabele:"
-
-        # 🔍 SPRAWDŹ cc_lot_mappings
-        st.markdown("### 🔍 Sprawdzenie tabeli cc_lot_mappings")
-        cursor.execute("""
-            SELECT clm.cc_id, clm.lot_id, clm.shares_reserved, oc.status, oc.ticker
-            FROM cc_lot_mappings clm
-            JOIN options_cc oc ON clm.cc_id = oc.id
-            WHERE oc.ticker = ?
-            ORDER BY clm.cc_id
-        """, (ticker,))
-        
-        cc_mappings = cursor.fetchall()
-        if cc_mappings:
-            st.write("**🔍 Mapowania w cc_lot_mappings:**")
-            total_in_mappings = 0
-            for mapping in cc_mappings:
-                cc_id, lot_id, shares_reserved, cc_status, cc_ticker = mapping
-                total_in_mappings += shares_reserved
-                status_icon = "🟢" if cc_status == 'open' else "🔴"
-                st.write(f"- {status_icon} CC #{cc_id} → LOT #{lot_id}: {shares_reserved} akcji (status: {cc_status})")
-            
-            st.write(f"**RAZEM w cc_lot_mappings: {total_in_mappings} akcji**")
-            
-            # NAPRAWA - usuń mapowania dla bought_back CC
-            if st.button("🔧 USUŃ mapowania dla bought_back CC", key="clean_mappings"):
-                cursor.execute("""
-                    DELETE FROM cc_lot_mappings 
-                    WHERE cc_id IN (
-                        SELECT id FROM options_cc 
-                        WHERE status IN ('bought_back', 'expired')
-                    )
-                """)
-                
-                deleted_rows = cursor.rowcount
-                conn.commit()
-                st.success(f"✅ Usunięto {deleted_rows} mapowań dla bought_back/expired CC")
-                st.info("🔄 Teraz kliknij przycisk RESET quantity_open")
-                
-        else:
-            st.write("- Tabela cc_lot_mappings jest pusta")
-            
-        # 🔧 PRZYCISK RESET (zawsze dostępny)
-# ZAMIEŃ PRZYCISK RESET NA TEN BEZPIECZNY:
-
-        # 🔧 BEZPIECZNY PRZYCISK RESET 
-        if st.button("🔧 BEZPIECZNY RESET quantity_open", key="safe_reset_qty_open"):
-            # 1. Oblicz ile faktycznie sprzedano
-            cursor.execute("""
-                SELECT COALESCE(SUM(sts.qty_from_lot), 0)
-                FROM stock_trade_splits sts
-                WHERE sts.lot_id = ?
-            """, (lot_id,))
-            total_sold = cursor.fetchone()[0]
-            
-            # 2. Oblicz ile jest zarezerwowane pod OTWARTE CC
-            cursor.execute("""
-                SELECT COALESCE(SUM(oc.contracts * 100), 0)
-                FROM options_cc oc
-                WHERE oc.ticker = ? AND oc.status = 'open'
-            """, (ticker,))
-            total_reserved_open_cc = cursor.fetchone()[0]
-            
-            # 3. PRAWIDŁOWA FORMUŁA: total - sprzedane - otwarte_cc
-            correct_quantity_open = all_lots[0][2] - total_sold - total_reserved_open_cc
-            
-            # 4. Zabezpieczenie - nie może być ujemne
-            if correct_quantity_open < 0:
-                st.error(f"❌ BŁĄD: Masz więcej CC ({total_reserved_open_cc}) niż dostępnych akcji!")
-                st.error(f"Total: {all_lots[0][2]}, Sprzedane: {total_sold}, CC: {total_reserved_open_cc}")
-                st.error("Musisz najpierw odkupić część CC!")
-            else:
-                cursor.execute("""
-                    UPDATE lots 
-                    SET quantity_open = ? 
-                    WHERE id = ?
-                """, (correct_quantity_open, lot_id))
-                
-                conn.commit()
-                st.success(f"✅ BEZPIECZNIE zresetowano quantity_open LOT #{lot_id} na {correct_quantity_open}")
-                st.info(f"📊 Formuła: {all_lots[0][2]} (total) - {total_sold} (sprzedane) - {total_reserved_open_cc} (otwarte CC) = {correct_quantity_open}")
-                
-                if correct_quantity_open > 0:
-                    st.success(f"✅ Możesz wystawić maksymalnie {correct_quantity_open // 100} nowych CC")
-                else:
-                    st.warning("⚠️ Brak wolnych akcji - wszystkie są sprzedane lub pod CC")
-        conn.close()
-        
-    except Exception as e:
-        st.error(f"Błąd debug: {e}")
-    
-    # ... reszta oryginalnej funkcji ...
-    
-    # ... reszta oryginalnej funkcji ...
-    """🔧 NAPRAWIONA: Podgląd sprzedaży CC z walidacją pokrycia"""
     st.markdown("### 🎯 Podgląd sprzedaży Covered Call")
     
     ticker = form_data['ticker']
@@ -727,13 +354,12 @@ def show_cc_sell_preview(form_data):
     sell_date = form_data['sell_date']
     
     # WALIDACJA DAT - nie można sprzedać CC przed zakupem akcji
-    # 🔧 NAPRAWKA: Używaj nowej funkcji chronologii zamiast get_lots_by_ticker
     earliest_lot_check = db.check_cc_coverage_with_chronology(ticker, 1, sell_date)
     
     if earliest_lot_check.get('debug_info', {}).get('owned_on_date', 0) == 0:
-        st.error(f"❌ **BŁĄD DATY**: Nie można sprzedać CC przed zakupem akcji!")
-        st.error(f"   Data sprzedaży CC: {sell_date}")
-        st.error(f"   Brak akcji {ticker} na {sell_date}")
+        st.error(f"❌ Nie można sprzedać opcji przed zakupem akcji")
+        st.error(f"Data sprzedaży CC: {sell_date}")
+        st.error(f"Brak akcji {ticker} na {sell_date}")
         
         if st.button("❌ Popraw datę", key="fix_date"):
             if 'show_cc_preview' in st.session_state:
@@ -741,14 +367,13 @@ def show_cc_sell_preview(form_data):
             st.rerun()
         return
     
-    # 🔧 NAPRAWKA: Sprawdź pokrycie używając naprawionej funkcji
+    # Sprawdź pokrycie używając funkcji chronologii
     coverage = db.check_cc_coverage_with_chronology(ticker, contracts, sell_date)
     
     if not coverage.get('can_cover'):
-        st.error(f"❌ **BRAK POKRYCIA dla {contracts} kontraktów {ticker}**")
-        st.error(f"   {coverage.get('message', 'Nieznany błąd')}")
+        st.error(f"❌ Brak pokrycia dla {contracts} kontraktów {ticker}")
+        st.error(f"{coverage.get('message', 'Nieznany błąd')}")
         
-        # 🔧 NAPRAWKA: Używaj debug_info zamiast niezdefiniowanych pól
         debug = coverage.get('debug_info', {})
         st.write(f"🎯 Potrzeba: {coverage.get('shares_needed', contracts * 100)} akcji")
         st.write(f"📊 Dostępne na {sell_date}: {debug.get('available_calculated', 0)} akcji")
@@ -756,7 +381,6 @@ def show_cc_sell_preview(form_data):
         st.write(f"💰 Sprzedane przed {sell_date}: {debug.get('sold_before', 0)} akcji")
         st.write(f"🎯 Zarezerwowane przed {sell_date}: {debug.get('cc_reserved_before', 0)} akcji")
         
-        # Przycisk anulowania
         if st.button("❌ Anuluj", key="cancel_cc"):
             if 'show_cc_preview' in st.session_state:
                 del st.session_state.show_cc_preview
@@ -765,8 +389,8 @@ def show_cc_sell_preview(form_data):
             st.rerun()
         return
     
-    # ✅ POKRYCIE OK - POKAŻ SZCZEGÓŁY
-    st.success(f"✅ **POKRYCIE OK dla {contracts} kontraktów {ticker}**")
+    # POKRYCIE OK - POKAŻ SZCZEGÓŁY
+    st.success(f"✅ Pokrycie OK dla {contracts} kontraktów {ticker}")
     
     # Podstawowe kalkulacje
     total_premium_usd = premium_received * contracts * 100
@@ -807,35 +431,35 @@ def show_cc_sell_preview(form_data):
     
     with col_preview1:
         st.markdown("**💰 Podstawowe dane:**")
-        st.write(f"🎯 **Ticker**: {ticker}")
-        st.write(f"📊 **Kontrakty**: {contracts}")
-        st.write(f"🔒 **Pokrycie**: {shares_covered} akcji")
-        st.write(f"💲 **Strike**: ${strike_price:.2f}")
-        st.write(f"📅 **Expiry**: {expiry_date}")
+        st.write(f"🎯 Ticker: {ticker}")
+        st.write(f"📊 Kontrakty: {contracts}")
+        st.write(f"🔒 Pokrycie: {shares_covered} akcji")
+        st.write(f"💲 Strike: ${strike_price:.2f}")
+        st.write(f"📅 Expiry: {expiry_date}")
     
     with col_preview2:
         st.markdown("**💵 Premium USD:**")
-        st.write(f"💰 **Premium brutto**: ${total_premium_usd:.2f}")
-        st.write(f"💸 **Broker fee**: ${broker_fee:.2f}")
-        st.write(f"💸 **Reg fee**: ${reg_fee:.2f}")
-        st.write(f"💰 **Razem prowizje**: ${total_fees:.2f}")
-        st.success(f"**💚 Premium NETTO: ${net_premium_usd:.2f}**")
-        st.write(f"📅 **Data sprzedaży**: {sell_date}")
+        st.write(f"💰 Premium brutto: ${total_premium_usd:.2f}")
+        st.write(f"💸 Broker fee: ${broker_fee:.2f}")
+        st.write(f"💸 Reg fee: ${reg_fee:.2f}")
+        st.write(f"💰 Razem prowizje: ${total_fees:.2f}")
+        st.success(f"💚 Premium NETTO: ${net_premium_usd:.2f}")
+        st.write(f"📅 Data sprzedaży: {sell_date}")
     
     with col_preview3:
         st.markdown("**🇵🇱 Przeliczenie PLN:**")
         fees_pln = total_fees * fx_rate
         
         if fx_success:
-            st.success(f"💱 **Kurs NBP** ({fx_date}): {fx_rate:.4f}")
+            st.success(f"💱 Kurs NBP ({fx_date}): {fx_rate:.4f}")
         else:
-            st.warning(f"⚠️ **Kurs fallback**: {fx_rate:.4f}")
+            st.warning(f"⚠️ Kurs fallback: {fx_rate:.4f}")
         
-        st.write(f"💰 **Premium brutto PLN**: {total_premium_pln:.2f} zł")
-        st.write(f"💸 **Prowizje PLN**: {fees_pln:.2f} zł")
-        st.success(f"**💚 Premium NETTO PLN: {net_premium_pln:.2f} zł**")
+        st.write(f"💰 Premium brutto PLN: {total_premium_pln:.2f} zł")
+        st.write(f"💸 Prowizje PLN: {fees_pln:.2f} zł")
+        st.success(f"💚 Premium NETTO PLN: {net_premium_pln:.2f} zł")
     
-    # 🔧 NAPRAWKA: Alokacja FIFO z właściwymi kluczami
+    # Alokacja FIFO
     st.markdown("---")
     st.markdown("### 🔄 Alokacja pokrycia FIFO")
     
@@ -846,17 +470,16 @@ def show_cc_sell_preview(form_data):
                 col_alloc1, col_alloc2 = st.columns(2)
                 
                 with col_alloc1:
-                    st.write(f"📅 **Data zakupu**: {allocation.get('buy_date', 'N/A')}")
-                    st.write(f"💰 **Cena zakupu**: ${allocation.get('buy_price_usd', 0):.2f}")
-                    # 🔧 NAPRAWKA: Używaj właściwego klucza
+                    st.write(f"📅 Data zakupu: {allocation.get('buy_date', 'N/A')}")
+                    st.write(f"💰 Cena zakupu: ${allocation.get('buy_price_usd', 0):.2f}")
                     available_qty = allocation.get('qty_available_on_date', allocation.get('qty_total', 0))
-                    st.write(f"📊 **Dostępne**: {available_qty} akcji")
+                    st.write(f"📊 Dostępne: {available_qty} akcji")
                 
                 with col_alloc2:
-                    st.write(f"🎯 **Do rezerwacji**: {allocation.get('qty_to_reserve', 0)} akcji")
+                    st.write(f"🎯 Do rezerwacji: {allocation.get('qty_to_reserve', 0)} akcji")
                     remaining = allocation.get('qty_remaining_after', available_qty - allocation.get('qty_to_reserve', 0))
-                    st.write(f"📦 **Pozostanie**: {remaining} akcji")
-                    st.write(f"💱 **Kurs zakupu**: {allocation.get('fx_rate', 0):.4f}")
+                    st.write(f"📦 Pozostanie: {remaining} akcji")
+                    st.write(f"💱 Kurs zakupu: {allocation.get('fx_rate', 0):.4f}")
     else:
         st.warning("⚠️ Brak szczegółów alokacji FIFO")
     
@@ -889,16 +512,15 @@ def show_cc_sell_preview(form_data):
                 save_result = db.save_covered_call_to_database(cc_data)
                 
                 if save_result['success']:
-                    st.success(f"✅ **{save_result['message']}**")
-                    st.info(f"💰 **Premium**: ${total_premium_usd:.2f} → {total_premium_pln:.2f} zł")
-                    st.info(f"🔒 **Zarezerwowano**: {shares_covered} akcji {ticker}")
+                    st.success(f"✅ {save_result['message']}")
+                    st.info(f"💰 Premium: ${total_premium_usd:.2f} → {total_premium_pln:.2f} zł")
+                    st.info(f"🔒 Zarezerwowano: {shares_covered} akcji {ticker}")
                     st.balloons()
                 else:
-                    st.error(f"❌ **Błąd zapisu**: {save_result['message']}")
+                    st.error(f"❌ Błąd zapisu: {save_result['message']}")
     
     with col_btn2:
         if st.button("➕ Nowa CC", key="new_cc_btn"):
-            # Wyczyść formularz
             keys_to_clear = ['show_cc_preview', 'cc_form_data', 'cc_to_save']
             for key in keys_to_clear:
                 if key in st.session_state:
@@ -910,7 +532,8 @@ def show_cc_sell_preview(form_data):
             keys_to_clear = ['show_cc_preview', 'cc_form_data', 'cc_to_save']
             for key in keys_to_clear:
                 if key in st.session_state:
-                    del st
+                    del st.session_state[key]
+            st.rerun()
 
 def show_buyback_expiry_tab():
     """Tab buyback i expiry - Z PRAWDZIWYM CZĘŚCIOWYM BUYBACK"""
@@ -1116,10 +739,10 @@ def show_buyback_expiry_tab():
         
         # ===== EXPIRY SEKCJA (bez zmian) =====
         with col2:
-            st.markdown("### 📅 Expiry CC")
-            st.info("Oznacz opcje jako wygasłe w dniu expiry")
+            st.markdown("### 📅 Expiry/Assignment CC")
+            st.info("Dwa scenariusze: opcja wygasa lub zostaje wykonana")
             
-            # Znajdź CC które mogą być expired
+            # Znajdź CC które mogą być expired/assigned
             today = date.today()
             expirable_cc = [cc for cc in open_cc_list 
                            if datetime.strptime(cc['expiry_date'], '%Y-%m-%d').date() <= today]
@@ -1129,7 +752,7 @@ def show_buyback_expiry_tab():
                                 for cc in expirable_cc]
                 
                 selected_expiry_option = st.selectbox(
-                    "Wybierz CC do expiry:",
+                    "Wybierz CC:",
                     options=expiry_options,
                     key="expiry_select"
                 )
@@ -1138,31 +761,59 @@ def show_buyback_expiry_tab():
                 selected_expiry_cc = next((cc for cc in expirable_cc if cc['id'] == selected_expiry_id), None)
                 
                 if selected_expiry_cc:
-                    with st.form("expiry_form"):
-                        st.write(f"**Expiry CC #{selected_expiry_id}:**")
-                        st.write(f"📊 {selected_expiry_cc['ticker']} - {selected_expiry_cc['contracts']} kontraktów")
-                        st.write(f"💰 Premium: ${selected_expiry_cc['premium_sell_usd']:.2f}/akcja")
-                        st.write(f"📅 Data expiry: {selected_expiry_cc['expiry_date']}")
+                    st.write(f"**📊 {selected_expiry_cc['ticker']} - {selected_expiry_cc['contracts']} kontraktów**")
+                    st.write(f"💰 Strike: ${selected_expiry_cc['strike_usd']:.2f}")
+                    st.write(f"📅 Expiry: {selected_expiry_cc['expiry_date']}")
+                    
+                    # DWA SCENARIUSZE
+                    col_expire, col_assign = st.columns(2)
+                    
+                    with col_expire:
+                        st.markdown("**✅ EXPIRE**")
+                        st.caption("Opcja wygasła bezwartościowo")
+                        st.caption("Cena < Strike")
+                        st.success("🎉 Yield: 100% premium")
                         
-                        st.info("✅ **Expiry = 100% zysk** (całe premium pozostaje)")
-                        
-                        if st.form_submit_button("📅 Oznacz jako Expired", type="primary", use_container_width=True):
+                        if st.button("✅ EXPIRE", key=f"expire_btn_{selected_expiry_id}", 
+                                   use_container_width=True, type="primary"):
                             
                             result = db.expire_covered_call(selected_expiry_id)
                             
                             if result['success']:
                                 st.success(f"✅ {result['message']}")
-                                
-                                with st.expander("📊 Szczegóły expiry:", expanded=True):
-                                    st.write(f"**Premium zachowana (PLN):** {format_currency_pln(result.get('premium_kept_pln', result.get('pl_pln', 0)))}")
-                                    st.write(f"**Akcje zwolnione:** {result['shares_released']}")
-                                    st.success(f"**P/L (PLN): +{format_currency_pln(result.get('pl_pln', 0))}**")
-                                
-                                
+                                st.success("🎉 **100% yield** - premia została, akcje zostały!")
+                                st.balloons()
+                                st.rerun()
                             else:
                                 st.error(f"❌ {result['message']}")
+                    
+                    with col_assign:
+                        st.markdown("**📞 ASSIGN**")
+                        st.caption("Opcja została wykonana")
+                        st.caption("Cena > Strike")
+                        st.info("💼 Akcje sprzedane po strike")
+                        
+                        if st.button("📞 ASSIGN", key=f"assign_btn_{selected_expiry_id}", 
+                                   use_container_width=True):
+                            
+                            result = db.assign_covered_call(selected_expiry_id)
+                            
+                            if result['success']:
+                                st.success(f"✅ {result['message']}")
+                                st.info(f"💰 P/L total: {result.get('pl_pln', 0):.2f} PLN")
+                                st.warning("⚠️ Akcje sprzedane - quantity_open = 0")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {result['message']}")
+                                
+                    # Pomoc dla użytkownika
+                    st.markdown("---")
+                    st.markdown("**💡 Która opcja?**")
+                    st.markdown("• **EXPIRE** - jeśli cena akcji < strike na expiry")
+                    st.markdown("• **ASSIGN** - jeśli cena akcji > strike na expiry")
+                    
             else:
-                st.warning("⏳ **Brak CC gotowych do expiry**")
+                st.warning("⏳ **Brak CC gotowych do expiry/assignment**")
     
     except Exception as e:
         st.error(f"❌ Błąd ładowania buyback/expiry: {e}")
@@ -1668,454 +1319,309 @@ def show_open_cc_tab():
 
 
 def show_cc_history_tab():
-    """
-    PUNKT 67 + 68: Historia CC z zaawansowaną analizą P/L + zaawansowane filtry
-    """
-    st.subheader("📋 Historia Covered Calls")
+    """Historia CC - centrum analityczne strategii opcyjnej"""
     
     try:
         closed_cc_analysis = db.get_closed_cc_analysis()
     except Exception as e:
-        st.error(f"❌ Błąd pobierania historii CC: {e}")
+        st.error(f"Błąd pobierania historii CC: {e}")
         return
     
     if not closed_cc_analysis:
-        st.info("📋 **Brak zamkniętych CC** - sprzedaj i zamknij CC aby zobaczyć historię")
+        st.info("Brak zamkniętych pozycji CC. Sprzedaj i zamknij CC aby zobaczyć analizy.")
         return
     
-    # Performance Summary
+    # === STRATEGICZNE KPI ===
     performance = db.get_cc_performance_summary()
     
     if performance and performance.get('total_closed', 0) > 0:
-        st.markdown("### 📊 Performance Summary")
+        st.markdown("### 📊 Strategic Performance Dashboard")
         
-        col_perf1, col_perf2, col_perf3, col_perf4 = st.columns(4)
+        # Główne metryki
+        col1, col2, col3, col4 = st.columns(4)
         
-        with col_perf1:
-            total_pl = performance.get('total_realized_pl', 0) or 0
+        total_pl = performance.get('total_realized_pl', 0) or 0
+        total_closed = performance.get('total_closed', 0) or 0
+        expired_count = performance.get('expired_count', 0) or 0
+        buyback_count = performance.get('buyback_count', 0) or 0
+        
+        # Oblicz dodatkowe metryki
+        wins = sum(1 for cc in closed_cc_analysis if cc.get('pl_pln', 0) > 0)
+        losses = total_closed - wins
+        
+        if wins > 0:
+            avg_win = sum(cc.get('pl_pln', 0) for cc in closed_cc_analysis if cc.get('pl_pln', 0) > 0) / wins
+        else:
+            avg_win = 0
+            
+        if losses > 0:
+            avg_loss = sum(cc.get('pl_pln', 0) for cc in closed_cc_analysis if cc.get('pl_pln', 0) < 0) / losses
+        else:
+            avg_loss = 0
+        
+        with col1:
             st.metric(
                 "💰 Total P/L",
-                f"{total_pl:.2f} PLN",  # PUNKT 68: Dokładne wartości
-                help="Łączny zrealizowany P/L"
+                f"{total_pl:+,.0f} PLN",
+                delta=f"Per trade: {total_pl/total_closed:+,.0f}" if total_closed > 0 else None
             )
         
-        with col_perf2:
-            avg_pl = performance.get('avg_pl_per_cc', 0) or 0
+        with col2:
+            success_rate = (wins / total_closed * 100) if total_closed > 0 else 0
             st.metric(
-                "📈 Avg per CC",
-                f"{avg_pl:.2f} PLN",  # PUNKT 68: Dokładne wartości
-                help="Średni P/L na pozycję"
+                "🎯 Success Rate",
+                f"{success_rate:.1f}%",
+                delta=f"{wins}W / {losses}L"
             )
         
-        with col_perf3:
-            total_closed = performance.get('total_closed', 0) or 0
-            expired_count = performance.get('expired_count', 0) or 0
-            win_rate = (expired_count / total_closed * 100) if total_closed > 0 else 0
-            st.metric(
-                "🏆 Win Rate",
-                f"{win_rate:.1f}%",
-                help="% opcji które wygasły (max profit)"
-            )
-        
-        with col_perf4:
-            buyback_count = performance.get('buyback_count', 0) or 0
-            st.metric(
-                "📝 Total Closed",
-                f"{total_closed}",
-                help=f"Expired: {expired_count}, Bought back: {buyback_count}"
-            )
- 
-        # ✅ CLEANUP SECTION - NOWA FUNKCJA!
-        st.markdown("---")
-        st.markdown("### 🧹 Narzędzia cleanup")
-        
-        col_cleanup1, col_cleanup2, col_cleanup3 = st.columns(3)
-        
-        with col_cleanup1:
-            if st.button("🧹 Usuń orphaned cashflow", key="cleanup_cashflow", help="Usuwa cashflow bez powiązań z CC"):
-                with st.spinner("Szukam orphaned cashflow..."):
-                    result = db.cleanup_orphaned_cashflow()
-                    if result['success']:
-                        st.success(f"✅ {result['message']}")
-                        if result['deleted_count'] > 0:
-                            st.info(f"🗑️ Usunięto {result['deleted_count']} orphaned cashflow")
-                            for desc in result['deleted_descriptions']:
-                                st.write(f"   • {desc}")
-                    else:
-                        st.error(f"❌ {result['message']}")
-        
-        with col_cleanup2:
-            if st.button("📊 Sprawdź integralność", key="check_integrity", help="Sprawdza spójność CC vs cashflow"):
-                integrity = db.check_cc_cashflow_integrity()
-                
-                if integrity['issues']:
-                    st.warning(f"⚠️ Znaleziono {len(integrity['issues'])} problemów:")
-                    for issue in integrity['issues']:
-                        st.write(f"   • {issue}")
-                else:
-                    st.success("✅ Brak problemów z integralnością")
-        
-        with col_cleanup3:
-            if st.button("🔄 Odśwież dane", key="refresh_history"):
-                st.rerun()
- 
-        # Performance per ticker
-        ticker_performance = performance.get('ticker_performance', [])
-        if ticker_performance:
-            st.markdown("### 🎯 Performance per ticker")
-            
-            ticker_data = []
-            for ticker_perf in ticker_performance:
-                ticker_data.append({
-                    'Ticker': ticker_perf.get('ticker', 'N/A'),
-                    'CC Count': ticker_perf.get('cc_count', 0),
-                    'Total P/L': f"{ticker_perf.get('total_pl', 0):,.2f} PLN",
-                    'Avg P/L': f"{ticker_perf.get('avg_pl', 0):,.2f} PLN", 
-                    'Win Rate': f"{ticker_perf.get('win_rate', 0):.1f}%",
-                    'Expired': ticker_perf.get('expired_count', 0),
-                    'Bought Back': ticker_perf.get('buyback_count', 0)
-                })
-            
-            st.dataframe(ticker_data, use_container_width=True)
-    
-    # PUNKT 68: FILTRY
-    st.markdown("### 🔍 Filtry")
-    
-    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-    
-    with col_f1:
-        all_tickers = list(set([cc['ticker'] for cc in closed_cc_analysis]))
-        selected_tickers = st.multiselect(
-            "Tickery:",
-            options=all_tickers,
-            default=all_tickers,
-            key="history_ticker_filter_68"
-        )
-    
-    with col_f2:
-        status_filter = st.selectbox(
-            "Status:",
-            ["Wszystkie", "Expired", "Bought back"],
-            key="history_status_filter_68"
-        )
-    
-    with col_f3:
-        sort_options = [
-            "Data ↓", "Data ↑", 
-            "P/L ↓", "P/L ↑",
-            "Yield ↓", "Yield ↑",
-            "Premium ↓", "Premium ↑",
-            "Ticker A-Z"
-        ]
-        sort_by = st.selectbox(
-            "Sortowanie:",
-            options=sort_options,
-            key="history_sort_filter_68"
-        )
-    
-    with col_f4:
-        if st.button("🔄 Reset", key="reset_filters_68"):
-            st.rerun()
-    
-    # Zaawansowane filtry
-    with st.expander("⚙️ Filtry zaawansowane", expanded=False):
-        col_af1, col_af2 = st.columns(2)
-        
-        with col_af1:
-            st.markdown("**📅 Zakres dat:**")
-            
-            from datetime import datetime
-            all_dates = []
-            for cc in closed_cc_analysis:
-                if 'close_date' in cc and cc['close_date']:
-                    try:
-                        cc_date = datetime.strptime(cc['close_date'], '%Y-%m-%d').date()
-                        all_dates.append(cc_date)
-                    except:
-                        pass
-            
-            if all_dates:
-                min_date = min(all_dates)
-                max_date = max(all_dates)
-                
-                date_from = st.date_input("Od:", value=min_date, key="date_from_68")
-                date_to = st.date_input("Do:", value=max_date, key="date_to_68")
-            else:
-                date_from = None
-                date_to = None
-                st.info("Brak dat do filtrowania")
-        
-        with col_af2:
-            st.markdown("**💰 Zakresy kwot:**")
-            
-            all_pl = [cc.get('pl_pln', 0) for cc in closed_cc_analysis if 'pl_pln' in cc]
-            if all_pl:
-                min_pl = min(all_pl)
-                max_pl = max(all_pl)
-                
-                min_pl_slider = int(min_pl - 1) if min_pl >= 0 else int(min_pl - abs(min_pl * 0.1) - 1)
-                max_pl_slider = int(max_pl + 2)
-                
-                pl_range = st.slider(
-                    "P/L PLN:",
-                    min_value=min_pl_slider,
-                    max_value=max_pl_slider,
-                    value=(int(min_pl), int(max_pl) + 1),
-                    step=1,
-                    key="pl_range_68",
-                    help=f"Rzeczywisty zakres: {min_pl:.2f} - {max_pl:.2f} PLN"
+        with col3:
+            if avg_loss != 0:
+                profit_factor = abs(avg_win / avg_loss) if avg_loss < 0 else 0
+                st.metric(
+                    "⚖️ Risk/Reward", 
+                    f"1:{profit_factor:.1f}",
+                    delta="Win vs Loss size"
                 )
-                
-                st.caption(f"💡 Rzeczywiste P/L: {min_pl:.2f} do {max_pl:.2f} PLN")
             else:
-                pl_range = None
-                st.info("Brak danych P/L")
+                st.metric("⚖️ Risk/Reward", "N/A")
+        
+        with col4:
+            expire_rate = (expired_count / total_closed * 100) if total_closed > 0 else 0
+            st.metric(
+                "🏆 Max Profit Rate",
+                f"{expire_rate:.1f}%", 
+                delta=f"{expired_count} expired"
+            )
+        
+        # === STRATEGICZNE INSIGHTS ===
+        st.markdown("### 🧠 Strategy Insights")
+        
+        col_insight1, col_insight2 = st.columns(2)
+        
+        with col_insight1:
+            st.markdown("**💡 Performance Breakdown:**")
+            
+            if avg_win > 0 and avg_loss < 0:
+                st.success(f"Average Win: +{avg_win:,.0f} PLN")
+                st.error(f"Average Loss: {avg_loss:,.0f} PLN")
+                
+                if profit_factor > 2:
+                    st.info("🎯 Excellent risk management - losses well controlled")
+                elif profit_factor > 1:
+                    st.warning("⚠️ Acceptable risk profile - monitor position sizing")
+                else:
+                    st.error("❌ Poor risk/reward - consider tighter stops or better entries")
+        
+        with col_insight2:
+            st.markdown("**📈 Strategy Recommendations:**")
+            
+            if expire_rate > 70:
+                st.success("✅ Great strike selection - most options expire worthless")
+            elif expire_rate > 50:
+                st.info("📊 Good strike distance - moderate assignments")
+            else:
+                st.warning("⚠️ Too many assignments - consider further OTM strikes")
+                
+            # Seasonality hint
+            import datetime
+            current_month = datetime.date.today().month
+            if 3 <= current_month <= 5:
+                st.info("🌱 Q1 earnings season - watch IV expansion opportunities")
+            elif current_month in [10, 11]:
+                st.info("🍂 Q3 earnings + volatility season ahead")
     
-    # Aplikowanie filtrów
+    # === TICKER PERFORMANCE MATRIX ===
+    ticker_performance = performance.get('ticker_performance', [])
+    if ticker_performance:
+        st.markdown("### 🎯 Ticker Performance Matrix")
+        
+        # Sortuj według P/L
+        ticker_performance.sort(key=lambda x: x.get('total_pl', 0), reverse=True)
+        
+        for i, ticker_perf in enumerate(ticker_performance):
+            ticker = ticker_perf.get('ticker', 'N/A')
+            total_pl = ticker_perf.get('total_pl', 0)
+            cc_count = ticker_perf.get('cc_count', 0)
+            win_rate = ticker_perf.get('win_rate', 0)
+            
+            # Status icon
+            if i == 0:
+                icon = "🥇"  # Best performer
+            elif total_pl > 0:
+                icon = "✅" 
+            else:
+                icon = "❌"
+            
+            # Performance label
+            if total_pl > 5000:
+                label = "STAR PERFORMER"
+                color = "success"
+            elif total_pl > 0:
+                label = "PROFITABLE"
+                color = "info"
+            elif total_pl > -10000:
+                label = "UNDERPERFORMING"
+                color = "warning"
+            else:
+                label = "AVOID"
+                color = "error"
+            
+            col_ticker, col_metrics = st.columns([1, 3])
+            
+            with col_ticker:
+                if color == "success":
+                    st.success(f"{icon} **{ticker}**")
+                elif color == "info": 
+                    st.info(f"{icon} **{ticker}**")
+                elif color == "warning":
+                    st.warning(f"{icon} **{ticker}**")
+                else:
+                    st.error(f"{icon} **{ticker}**")
+            
+            with col_metrics:
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1:
+                    st.metric("P/L", f"{total_pl:+,.0f}")
+                with col_m2:
+                    st.metric("Trades", f"{cc_count}")
+                with col_m3:
+                    st.metric("Win Rate", f"{win_rate:.0f}%")
+                with col_m4:
+                    avg_per_trade = total_pl / cc_count if cc_count > 0 else 0
+                    st.metric("Per Trade", f"{avg_per_trade:+,.0f}")
+    
+    # === SMART FILTERS ===
+    st.markdown("### 🔍 Analysis Filters")
+    
+    with st.expander("Filter & Sort Options", expanded=False):
+        col_f1, col_f2, col_f3 = st.columns(3)
+        
+        with col_f1:
+            all_tickers = list(set([cc['ticker'] for cc in closed_cc_analysis]))
+            selected_tickers = st.multiselect(
+                "Select Tickers:",
+                options=all_tickers,
+                default=all_tickers[:3] if len(all_tickers) > 3 else all_tickers,  # Limit default
+                key="history_ticker_filter"
+            )
+        
+        with col_f2:
+            outcome_filter = st.selectbox(
+                "Outcome:",
+                ["All", "Profitable Only", "Losses Only", "Expired", "Bought Back"],
+                key="outcome_filter"
+            )
+        
+        with col_f3:
+            sort_options = {
+                "Recent First": lambda x: x.get('close_date', ''),
+                "Highest P/L": lambda x: x.get('pl_pln', 0),
+                "Lowest P/L": lambda x: x.get('pl_pln', 0),
+                "Best Yield": lambda x: x.get('yield_pct', 0),
+                "Ticker A-Z": lambda x: x.get('ticker', '')
+            }
+            sort_by = st.selectbox("Sort by:", list(sort_options.keys()))
+    
+    # Apply filters
     filtered_cc = []
     for cc in closed_cc_analysis:
-        if cc['ticker'] not in selected_tickers:
+        if selected_tickers and cc['ticker'] not in selected_tickers:
             continue
         
-        if status_filter != "Wszystkie":
-            if status_filter == "Expired" and cc.get('status') != 'expired':
-                continue
-            elif status_filter == "Bought back" and cc.get('status') != 'bought_back':
-                continue
+        pl = cc.get('pl_pln', 0)
+        status = cc.get('status', '')
         
-        if date_from and date_to and 'close_date' in cc:
-            try:
-                cc_date = datetime.strptime(cc['close_date'], '%Y-%m-%d').date()
-                if cc_date < date_from or cc_date > date_to:
-                    continue
-            except:
-                pass
-        
-        if pl_range and 'pl_pln' in cc:
-            if cc['pl_pln'] < pl_range[0] or cc['pl_pln'] > pl_range[1]:
-                continue
-        
+        if outcome_filter == "Profitable Only" and pl <= 0:
+            continue
+        elif outcome_filter == "Losses Only" and pl >= 0:
+            continue
+        elif outcome_filter == "Expired" and status != 'expired':
+            continue
+        elif outcome_filter == "Bought Back" and status != 'bought_back':
+            continue
+            
         filtered_cc.append(cc)
     
-    # Sortowanie
-    if sort_by == "Data ↓":
-        filtered_cc.sort(key=lambda x: x.get('close_date', ''), reverse=True)
-    elif sort_by == "Data ↑":
-        filtered_cc.sort(key=lambda x: x.get('close_date', ''))
-    elif sort_by == "P/L ↓":
-        filtered_cc.sort(key=lambda x: x.get('pl_pln', 0), reverse=True)
-    elif sort_by == "P/L ↑":
-        filtered_cc.sort(key=lambda x: x.get('pl_pln', 0))
-    elif sort_by == "Yield ↓":
-        filtered_cc.sort(key=lambda x: x.get('annualized_yield_pct', 0), reverse=True)
-    elif sort_by == "Yield ↑":
-        filtered_cc.sort(key=lambda x: x.get('annualized_yield_pct', 0))
-    elif sort_by == "Premium ↓":
-        filtered_cc.sort(key=lambda x: x.get('premium_sell_usd', 0), reverse=True)
-    elif sort_by == "Premium ↑":
-        filtered_cc.sort(key=lambda x: x.get('premium_sell_usd', 0))
-    elif sort_by == "Ticker A-Z":
-        filtered_cc.sort(key=lambda x: x.get('ticker', ''))
+    # Sort results
+    reverse_sort = sort_by in ["Recent First", "Highest P/L", "Best Yield"]
+    filtered_cc.sort(key=sort_options[sort_by], reverse=reverse_sort)
     
     if not filtered_cc:
-        st.warning("⚠️ Brak CC po zastosowaniu filtrów")
+        st.warning("No CC match your filters")
         return
     
-    # Wyniki
-    st.write(f"**Wyniki:** {len(filtered_cc)} z {len(closed_cc_analysis)} zamkniętych CC")
+    st.write(f"**Showing:** {len(filtered_cc)} of {len(closed_cc_analysis)} closed positions")
     
-    # Szczegółowa tabela
-    for cc in filtered_cc:
+    # === DETAILED RESULTS ===
+    st.markdown("### 📋 Trade Details")
+    
+    for cc in filtered_cc[:10]:  # Limit to top 10 for performance
         pl_pln = cc.get('pl_pln', 0)
-        if pl_pln > 0:
-            pl_emoji = "💚"
-        elif pl_pln < 0:
-            pl_emoji = "❤️"
-        else:
-            pl_emoji = "⚪"
         
-        outcome_emoji = cc.get('outcome_emoji', '📋')
+        # Visual indicators
+        if pl_pln > 1000:
+            pl_color = "🟢"
+            pl_label = "BIG WIN"
+        elif pl_pln > 0:
+            pl_color = "🔵" 
+            pl_label = "WIN"
+        elif pl_pln > -1000:
+            pl_color = "🟡"
+            pl_label = "SMALL LOSS"
+        else:
+            pl_color = "🔴"
+            pl_label = "BIG LOSS"
+        
+        outcome = "EXPIRED" if cc.get('status') == 'expired' else "BOUGHT BACK"
         ticker = cc.get('ticker', 'N/A')
-        cc_id = cc.get('cc_id') or cc.get('id') or cc.get('parent_cc_id') or 'N/A'
-        annualized_yield = cc.get('annualized_yield_pct', 0)
+        cc_id = cc.get('cc_id', cc.get('id', 'N/A'))
         
         with st.expander(
-            f"{outcome_emoji} {pl_emoji} CC #{cc_id} - {ticker} - {pl_pln:+,.2f} PLN",
+            f"{pl_color} {ticker} • {pl_label} • {pl_pln:+,.0f} PLN • {outcome}",
             expanded=False
         ):
+            col_d1, col_d2, col_d3 = st.columns(3)
             
-            col_detail1, col_detail2, col_detail3 = st.columns(3)
-            
-            with col_detail1:
-                st.markdown("**📊 Podstawowe info:**")
-                st.write(f"🎯 **Ticker**: {ticker} ({cc.get('contracts', 'N/A')} kontr.)")
-                st.write(f"💰 **Strike**: ${cc.get('strike_usd', 0):.2f}")
-                st.write(f"📅 **Okres**: {cc.get('open_date', 'N/A')} → {cc.get('close_date', 'N/A')}")
-            
-            with col_detail2:
-                st.markdown("**💵 Finansowe:**")
-                st.write(f"💲 **Premium sprzedaż**: ${cc.get('premium_sell_usd', 0):.2f}")
+            with col_d1:
+                st.markdown("**Trade Summary:**")
+                st.write(f"CC #{cc_id} • {cc.get('contracts', 1)} contracts")
+                st.write(f"Strike: ${cc.get('strike_usd', 0):.2f}")
+                st.write(f"Period: {cc.get('open_date', 'N/A')} → {cc.get('close_date', 'N/A')}")
+                
+            with col_d2:
+                st.markdown("**Financial:**")
+                premium = cc.get('premium_sell_usd', 0)
+                st.write(f"Premium: ${premium:.2f}")
                 if cc.get('premium_buyback_usd', 0) > 0:
-                    st.write(f"💸 **Premium buyback**: ${cc.get('premium_buyback_usd', 0):.2f}")
-                st.write(f"💰 **P/L PLN**: {pl_pln:+,.2f}")
-            
-            with col_detail3:
-                st.markdown("**📈 Performance:**")
-                st.write(f"📊 **Status**: {cc.get('outcome_text', cc.get('status', 'N/A'))}")
-                st.write(f"🎯 **Dni trzymania**: {cc.get('days_held', 0)}")
-                # Zamiast:
-               # st.write(f"📈 **Yield p.a.**: {cc.get('annualized_yield_pct', 0):.1f}%")
-
-                # Użyj:
+                    buyback = cc.get('premium_buyback_usd', 0)
+                    st.write(f"Buyback: ${buyback:.2f}")
+                st.write(f"Net P/L: {pl_pln:+,.0f} PLN")
+                
+            with col_d3:
+                st.markdown("**Analysis:**")
                 days_held = cc.get('days_held', 1)
-                days_held = max(days_held, 1)  # min 1 dzień
-                net_premium_pln = cc.get('pl_pln', 0)
-                premium_sell_pln = cc.get('premium_sell_pln', 0)
-
-                if premium_sell_pln > 0:
-                    premium_yield = (net_premium_pln / premium_sell_pln) * 100
-                    st.write(f"📈 **Yield**: {premium_yield:.1f}%")
+                st.write(f"Days held: {days_held}")
+                
+                # Calculate yield properly
+                premium_pln = cc.get('premium_sell_pln', 0)
+                if premium_pln > 0:
+                    yield_pct = (pl_pln / premium_pln) * 100
+                    st.write(f"Return: {yield_pct:+.1f}%")
+                    
+                    # Annualized only if meaningful
+                    if days_held >= 7:  # At least a week
+                        annual_yield = yield_pct * (365 / days_held)
+                        st.write(f"Annualized: {annual_yield:+.0f}%")
                 else:
-                    st.write(f"📈 **Yield p.a.**: N/A")
-                
+                    st.write("Return: N/A")
     
-    # Export CSV
-    if st.button("📥 Eksport CSV", key="export_history_csv"):
-        st.info("💡 **PUNKT 69** - Eksporty CSV będą dostępne w następnej wersji")
+    if len(filtered_cc) > 10:
+        st.info(f"Showing top 10 results. {len(filtered_cc) - 10} more available.")
+    
+    # === EXPORT ===
+    if st.button("📥 Export Analysis (CSV)", key="export_analysis"):
+        st.info("CSV export will be available in the next version")
 
-# Test funkcjonalności (opcjonalny)
-def test_options_prerequisites():
-    """Test wymagań dla modułu Options"""
-    
-    results = {
-        'stocks_available': False,
-        'table_exists': False,
-        'nbp_working': False,
-        'cashflows_working': False
-    }
-    
-    try:
-        # Test 1: Akcje w portfelu
-        lots_stats = db.get_lots_stats()
-        results['stocks_available'] = lots_stats['open_shares'] > 0
-        
-        # Test 2: Tabela options_cc
-        conn = db.get_connection()
-        if conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM options_cc")
-            cursor.fetchone()
-            results['table_exists'] = True
-            conn.close()
-        
-        # Test 3: NBP API
-        rate = nbp_api_client.get_usd_rate_for_date(date.today())
-        results['nbp_working'] = rate is not None
-        
-        # Test 4: Cashflows
-        cashflow_stats = db.get_cashflows_stats()
-        results['cashflows_working'] = cashflow_stats['total_records'] >= 0
-        
-    except Exception as e:
-        pass  # Testy opcjonalne
-    
-    return results
-    
-def show_cc_management_section():
-    """
-    PUNKT 63: Sekcja zarządzania CC (usuwanie, edycja)
-    """
-    st.markdown("---")
-    st.markdown("## 🗑️ Zarządzanie Covered Calls")
-    st.markdown("*Usuwanie błędnych operacji i czyszczenie danych*")
-    
-    # Pobierz listę CC do zarządzania
-    cc_list = db.get_deletable_cc_list()
-    
-    if not cc_list:
-        st.info("📝 Brak Covered Calls do zarządzania")
-        return
-    
-    st.markdown(f"### 📋 Lista CC ({len(cc_list)} rekordów)")
-    
-    # Tabela z przyciskami usuwania
-    for i, cc in enumerate(cc_list):
-        with st.expander(f"CC #{cc['id']} - {cc['ticker']} ({cc['contracts']} kontr.) - {cc['status']}", expanded=False):
-            
-            col_info, col_actions = st.columns([2, 1])
-            
-            with col_info:
-                st.markdown("**📊 Szczegóły:**")
-                st.write(f"🎯 **Ticker**: {cc['ticker']}")
-                st.write(f"📦 **Kontrakty**: {cc['contracts']} = {cc['shares_reserved']} akcji")
-                st.write(f"💰 **Premium**: ${cc['premium_sell_usd']:.2f} = {cc['premium_sell_pln']:.2f} PLN")
-                st.write(f"📅 **Otwarte**: {cc['open_date']} → **Expiry**: {cc['expiry_date']}")
-                st.write(f"🔒 **Status**: {cc['status']}")
-                
-                if cc['close_date']:
-                    st.write(f"❌ **Zamknięte**: {cc['close_date']}")
-                
-                # Ryzyko usunięcia
-                if cc['status'] == 'open':
-                    st.warning(f"⚠️ **Ryzyko**: {cc['delete_risk']}")
-                else:
-                    st.success(f"✅ **Ryzyko**: {cc['delete_risk']}")
-            
-            with col_actions:
-                st.markdown("**🔧 Akcje:**")
-                
-                # Przycisk usuwania z potwierdzeniem
-                delete_key = f"delete_cc_{cc['id']}"
-                confirm_key = f"confirm_delete_{cc['id']}"
-                
-                if st.button(f"🗑️ Usuń CC #{cc['id']}", key=delete_key, type="secondary"):
-                    st.session_state[confirm_key] = True
-                
-                # Potwierdzenie usunięcia
-                if st.session_state.get(confirm_key, False):
-                    st.warning("⚠️ **POTWIERDŹ USUNIĘCIE**")
-                    
-                    col_confirm, col_cancel = st.columns(2)
-                    
-                    with col_confirm:
-                        if st.button("✅ TAK, usuń", key=f"yes_delete_{cc['id']}", type="primary"):
-                            # Wykonaj usunięcie
-                            result = db.delete_covered_call(cc['id'], confirm_delete=True)
-                            
-                            if result['success']:
-                                st.success(f"✅ {result['message']}")
-                                details = result['details']
-                                st.info(f"🔓 Zwolniono {details['shares_released']} akcji {details['ticker']}")
-                                if details['cashflows_deleted'] > 0:
-                                    st.info(f"💸 Usunięto {details['cashflows_deleted']} powiązanych cashflow")
-                                
-                                # Wyczyść potwierdzenie i odśwież
-                                del st.session_state[confirm_key]
-                                st.rerun()
-                            else:
-                                st.error(f"❌ {result['message']}")
-                    
-                    with col_cancel:
-                        if st.button("❌ Anuluj", key=f"cancel_delete_{cc['id']}"):
-                            del st.session_state[confirm_key]
-                            st.rerun()
-    
-    # Dodatkowe narzędzia
-    st.markdown("---")
-    st.markdown("### 🧹 Narzędzia dodatkowe")
-    
-    col_tools1, col_tools2 = st.columns(2)
-    
-    with col_tools1:
-        if st.button("🔄 Odśwież listę", key="refresh_cc_list"):
-            st.rerun()
-    
-    with col_tools2:
-        open_count = len([cc for cc in cc_list if cc['status'] == 'open'])
-        if open_count > 0:
-            st.warning(f"⚠️ {open_count} otwartych CC - usuwanie zwolni rezerwacje!")
-        else:
-            st.success("✅ Wszystkie CC są zamknięte - bezpieczne usuwanie")
             
 def show_cc_edit_section():
     """
@@ -2225,175 +1731,6 @@ def show_cc_edit_section():
                             st.error(f"❌ {result['message']}")
                     else:
                         st.warning("⚠️ Brak zmian do zapisania")
-
-
-def show_bulk_operations_section():
-    """
-    PUNKT 64: Sekcja operacji masowych
-    """
-    st.markdown("---")
-    st.markdown("## 🗑️ Operacje masowe")
-    st.markdown("*Bulk delete i cleanup danych*")
-    
-    # Pobierz wszystkie CC
-    all_cc = db.get_deletable_cc_list()
-    
-    if not all_cc:
-        st.info("📝 Brak CC do operacji masowych")
-        return
-    
-    # Filtry dla bulk operations
-    col_filter1, col_filter2 = st.columns(2)
-    
-    with col_filter1:
-        # Filtr po statusie
-        status_filter = st.selectbox(
-            "Filtruj po statusie:",
-            ["Wszystkie", "Otwarte", "Zamknięte", "Expired", "Bought back"],
-            key="bulk_status_filter"
-        )
-    
-    with col_filter2:
-        # Filtr po tickerze
-        tickers = list(set([cc['ticker'] for cc in all_cc]))
-        ticker_filter = st.selectbox(
-            "Filtruj po tickerze:",
-            ["Wszystkie"] + tickers,
-            key="bulk_ticker_filter"  
-        )
-    
-    # Zastosuj filtry
-    filtered_cc = []
-    for cc in all_cc:
-        # Filtr status
-        if status_filter != "Wszystkie":
-            if status_filter == "Otwarte" and cc['status'] != 'open':
-                continue
-            elif status_filter == "Zamknięte" and cc['status'] == 'open':
-                continue
-            elif status_filter == "Expired" and cc['status'] != 'expired':
-                continue
-            elif status_filter == "Bought back" and cc['status'] != 'bought_back':
-                continue
-        
-        # Filtr ticker
-        if ticker_filter != "Wszystkie" and cc['ticker'] != ticker_filter:
-            continue
-            
-        filtered_cc.append(cc)
-    
-    if not filtered_cc:
-        st.warning("⚠️ Brak CC po zastosowaniu filtrów")
-        return
-    
-    st.markdown(f"### 📋 Filtered CC ({len(filtered_cc)} z {len(all_cc)})")
-    
-    # Multi-select dla bulk delete
-    cc_to_delete = []
-    
-    for cc in filtered_cc[:10]:  # Pokaż max 10 dla UI
-        if st.checkbox(
-            f"CC #{cc['id']} - {cc['ticker']} ({cc['status']}) - ${cc['premium_sell_usd']:.2f}",
-            key=f"bulk_select_{cc['id']}"
-        ):
-            cc_to_delete.append(cc['id'])
-    
-    if len(filtered_cc) > 10:
-        st.info(f"📋 Pokazano 10 z {len(filtered_cc)} CC. Użyj filtrów aby zawęzić wybór.")
-    
-    # Operacje masowe
-    if cc_to_delete:
-        st.markdown(f"### 🎯 Wybrano {len(cc_to_delete)} CC do usunięcia")
-        
-        col_bulk1, col_bulk2 = st.columns(2)
-        
-        with col_bulk1:
-            if st.button(f"🗑️ USUŃ {len(cc_to_delete)} CC", key="bulk_delete_btn", type="secondary"):
-                st.session_state.bulk_delete_confirm = cc_to_delete
-        
-        with col_bulk2:
-            if st.session_state.get('bulk_delete_confirm'):
-                if st.button("✅ POTWIERDŹ BULK DELETE", key="bulk_confirm", type="primary"):
-                    result = db.bulk_delete_covered_calls(st.session_state.bulk_delete_confirm, confirm_bulk=True)
-                    
-                    if result['success']:
-                        st.success(f"✅ {result['message']}")
-                        if result['shares_released']:
-                            st.info(f"🔓 Zwolniono akcje: {result['shares_released']}")
-                    else:
-                        st.error(f"❌ {result['message']}")
-                        if result['errors']:
-                            for error in result['errors']:
-                                st.error(f"   • {error}")
-                    
-                    # Wyczyść potwierdzenie
-                    del st.session_state.bulk_delete_confirm
-                    st.rerun()
-    
-    else:
-        st.info("☑️ Zaznacz CC do operacji masowych")
-
-def show_reservations_diagnostics_tab():
-    """
-    Diagnostyka rezerwacji CC ↔ LOT (FIFO) + spójność tabeli options_cc_reservations.
-    """
-    import streamlit as st
-    st.subheader("🛠️ Diagnostyka rezerwacji CC ↔ LOT")
-
-    try:
-        diag = db.get_reservations_diagnostics()
-    except Exception as e:
-        st.error(f"❌ Błąd diagnostyki: {e}")
-        return
-
-    if not diag.get('success'):
-        st.error(f"❌ {diag.get('message','Nieznany błąd')}")
-        return
-
-    has_map = diag.get('has_mapping_table', False)
-    if has_map:
-        st.info("📦 Tabela mapowań: **options_cc_reservations** → ✅ istnieje")
-    else:
-        st.warning("📦 Tabela mapowań: **options_cc_reservations** → ❌ brak (mapuję tylko na podstawie LOT-ów)\n\n"
-                   "Uruchom skrypt `db_fix_cc_reservations.py --apply`, aby ją odbudować.")
-
-    st.markdown("### 📊 Poziom Tickerów")
-    rows = []
-    for r in diag.get('tickers', []):
-        status = "✅ OK" if r['delta'] == 0 else ("🔻 za mało" if r['delta'] < 0 else "🔺 za dużo")
-        rows.append({
-            "Ticker": r['ticker'],
-            "Wymagane (kontr.*100)": r['required_reserved'],
-            "Faktycznie z LOT-ów": r['actual_reserved'],
-            "Delta": r['delta'],
-            "Status": status
-        })
-    if rows:
-        st.dataframe(rows, use_container_width=True)
-    else:
-        st.info("Brak otwartych CC.")
-
-    st.markdown("### 🔎 Poziom CC (mapowanie LOT-ów)")
-    for cc in diag.get('ccs', []):
-        expected = cc['expected_reserved']
-        mapped = cc.get('mapped_reserved')
-        hdr = f"CC #{cc['id']} – {cc['ticker']} – oczekiwane {expected} akcji"
-        if mapped is None:
-            hdr = "ℹ️ " + hdr + " | brak tabeli mapowań"
-        else:
-            emoji = "✅" if mapped == expected else "🟠"
-            hdr = f"{emoji} {hdr} | zmapowane {mapped}"
-
-        with st.expander(hdr, expanded=(mapped is not None and mapped != expected)):
-            st.write(f"📅 Open: {cc['open_date']}")
-            if mapped is None:
-                st.warning("Brak danych mapowania. Odbuduj `options_cc_reservations` naprawczym skryptem.")
-            else:
-                lot_rows = [{"LOT ID": d['lot_id'], "Zarezerwowane": d['qty_reserved']} for d in cc.get('mapped_details', [])]
-                if lot_rows:
-                    st.dataframe(lot_rows, use_container_width=True)
-                else:
-                    st.info("Brak wpisów mapowania dla tej CC.")
     
 
 if __name__ == "__main__":

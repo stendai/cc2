@@ -1,1 +1,1 @@
-findstr /s /i "partial_buyback_covered_call_with_mappings" *.py
+findstr /s /i "cc_lot_mappings" *.py
