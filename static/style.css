@@ -1,0 +1,83 @@
+/* static/style.css - CZYSTY CSS BEZ UNICODE */
+
+/* DATE INPUT FIXES */
+.stDateInput > div {
+    min-width: 250px !important;
+    width: auto !important;
+    overflow: visible !important;
+}
+
+.stDateInput select {
+    min-width: 100px !important;
+    max-width: none !important;
+    width: auto !important;
+    overflow: visible !important;
+    appearance: menulist !important;
+}
+
+.stDateInput .react-datepicker-wrapper {
+    width: 100% !important;
+    overflow: visible !important;
+}
+
+.stDateInput .react-datepicker__input-container input {
+    min-width: 150px !important;
+    width: 100% !important;
+}
+
+/* REMOVE SCROLLBARS */
+.stDateInput .react-datepicker__month-dropdown,
+.stDateInput .react-datepicker__year-dropdown {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+}
+
+.stDateInput .react-datepicker__month-dropdown::-webkit-scrollbar,
+.stDateInput .react-datepicker__year-dropdown::-webkit-scrollbar {
+    display: none !important;
+}
+
+/* GLOBAL SCROLLBAR FIXES */
+.stSelectbox select,
+.stMultiSelect > div > div {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+    overflow-y: auto !important;
+}
+
+.stSelectbox select::-webkit-scrollbar,
+.stMultiSelect > div > div::-webkit-scrollbar {
+    display: none !important;
+}
+
+/* WIDER COLUMNS */
+.stColumn {
+    min-width: 200px !important;
+}
+
+/* MOBILE RESPONSIVE */
+@media (max-width: 768px) {
+    .stDateInput > div {
+        min-width: 200px !important;
+        width: 100% !important;
+    }
+    
+    .stColumn {
+        min-width: 150px !important;
+    }
+}
+
+/* FORCE FIXES */
+.stDateInput {
+    transform: scale(1.05) !important;
+    transform-origin: left center !important;
+}
+
+.stDateInput select {
+    font-size: 16px !important;
+    padding: 8px 12px !important;
+    min-height: 38px !important;
+}

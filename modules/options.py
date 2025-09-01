@@ -215,7 +215,8 @@ def show_sell_cc_tab():
             with col_dates1:
                 sell_date = st.date_input(
                     "Data sprzedaży:",
-                    value=date.today() - timedelta(days=30)
+                    value=date.today(),
+                    key="cc_sell_date"
                 )
 
             with col_dates2:
@@ -865,12 +866,12 @@ def show_cc_sell_preview(form_data):
         'ticker': ticker,
         'contracts': contracts,
         'strike_usd': strike_price,
-        'premium_sell_usd': premium_received,
+        'premium_sell_usd': total_premium_usd,
         'open_date': sell_date,
         'expiry_date': expiry_date,
         'fx_open': fx_rate,
         'fx_open_date': fx_date, 
-        'premium_sell_pln': net_premium_pln,
+        'premium_sell_pln': total_premium_pln,
         'broker_fee': broker_fee,
         'reg_fee': reg_fee,
         'coverage': coverage
@@ -1109,7 +1110,7 @@ def show_buyback_expiry_tab():
                                         else:
                                             st.success("✅ **Pełny buyback** - pozycja zamknięta")
                                 
-                                st.rerun()
+                                
                             else:
                                 st.error(f"❌ {result['message']}")
         
@@ -1157,7 +1158,7 @@ def show_buyback_expiry_tab():
                                     st.write(f"**Akcje zwolnione:** {result['shares_released']}")
                                     st.success(f"**P/L (PLN): +{format_currency_pln(result.get('pl_pln', 0))}**")
                                 
-                                st.rerun()
+                                
                             else:
                                 st.error(f"❌ {result['message']}")
             else:
@@ -1208,8 +1209,10 @@ def show_buyback_cc_preview(form_data):
     shares_to_buyback = contracts_to_buyback * 100
     premium_proportion = contracts_to_buyback / total_contracts
     
-    premium_for_contracts_usd = premium_sell_usd * shares_to_buyback
-    premium_for_contracts_pln = premium_for_contracts_usd * fx_open
+    # ✅ POPRAWNIE: proporcja premii
+    premium_proportion = contracts_to_buyback / total_contracts
+    premium_for_contracts_usd = premium_sell_usd * premium_proportion
+    premium_for_contracts_pln = premium_sell_pln * premium_proportion
     
     buyback_cost_usd = buyback_price * shares_to_buyback
     total_fees_usd = broker_fee + reg_fee
@@ -1327,13 +1330,12 @@ def show_buyback_cc_preview(form_data):
             if result['success']:
                 st.success(f"✅ {result['message']}")
                 
-                # Wyczyść podgląd
-                if 'show_buyback_preview' in st.session_state:
-                    del st.session_state.show_buyback_preview
+                # ZACHOWAJ WYNIK W SESSION STATE
+                st.session_state.last_buyback_success = result
+                
+                # Wyczyść podgląd FORM ale NIE WYNIK
                 if 'buyback_form_data' in st.session_state:
                     del st.session_state.buyback_form_data
-                
-                st.rerun()
             else:
                 st.error(f"❌ {result['message']}")
 
@@ -1625,7 +1627,7 @@ def show_open_cc_tab():
                             
                             if changes:
                                 with st.spinner("Zapisywanie zmian..."):
-                                    result = db.update_covered_call_with_recalc(cc_detail['cc_id'], **changes)
+                                    result = db.update_covered_call(cc_detail['cc_id'], **changes)
                                     
                                     if result['success']:
                                         st.success(f"✅ {result['message']}")
@@ -1934,11 +1936,11 @@ def show_cc_history_tab():
         
         outcome_emoji = cc.get('outcome_emoji', '📋')
         ticker = cc.get('ticker', 'N/A')
-        cc_id = cc.get('id', 'N/A')
+        cc_id = cc.get('cc_id') or cc.get('id') or cc.get('parent_cc_id') or 'N/A'
         annualized_yield = cc.get('annualized_yield_pct', 0)
         
         with st.expander(
-            f"{outcome_emoji} {pl_emoji} CC #{cc_id} - {ticker} - {pl_pln:+,.2f} PLN ({annualized_yield:+.1f}% p.a.)",
+            f"{outcome_emoji} {pl_emoji} CC #{cc_id} - {ticker} - {pl_pln:+,.2f} PLN",
             expanded=False
         ):
             
@@ -1961,7 +1963,20 @@ def show_cc_history_tab():
                 st.markdown("**📈 Performance:**")
                 st.write(f"📊 **Status**: {cc.get('outcome_text', cc.get('status', 'N/A'))}")
                 st.write(f"🎯 **Dni trzymania**: {cc.get('days_held', 0)}")
-                st.write(f"📈 **Yield p.a.**: {annualized_yield:.1f}%")
+                # Zamiast:
+               # st.write(f"📈 **Yield p.a.**: {cc.get('annualized_yield_pct', 0):.1f}%")
+
+                # Użyj:
+                days_held = cc.get('days_held', 1)
+                days_held = max(days_held, 1)  # min 1 dzień
+                net_premium_pln = cc.get('pl_pln', 0)
+                premium_sell_pln = cc.get('premium_sell_pln', 0)
+
+                if premium_sell_pln > 0:
+                    premium_yield = (net_premium_pln / premium_sell_pln) * 100
+                    st.write(f"📈 **Yield**: {premium_yield:.1f}%")
+                else:
+                    st.write(f"📈 **Yield p.a.**: N/A")
                 
     
     # Export CSV
@@ -2149,14 +2164,28 @@ def show_cc_edit_section():
                 )
                 
                 # Nowa premium
-                new_premium = st.number_input(
-                    "Premium USD:",
-                    min_value=0.01,
-                    value=float(cc['premium_sell_usd']),
-                    step=0.01,
-                    format="%.2f", 
-                    key=f"{edit_key_base}_premium"
+                current_total_premium = float(cc['premium_sell_usd'])  # np. 500
+                contracts = int(cc['contracts'])                       # np. 5
+                current_premium_per_share = current_total_premium / (contracts * 100)  # 500/(5*100) = 1.0
+
+                new_premium_per_share = st.number_input(
+                    "Premium USD per share:",
+                    min_value=0.001,
+                    value=current_premium_per_share,  # np. 1.0 per share
+                    step=0.001,
+                    format="%.3f",  # 3 miejsca po przecinku
+                    key=f"{edit_key_base}_premium",
+                    help=f"Obecna: ${current_premium_per_share:.3f}/akcja (${current_total_premium:.2f} total)"
                 )
+                new_total_premium = new_premium_per_share * contracts * 100
+                if new_premium_per_share != current_premium_per_share:
+                    col_calc1, col_calc2 = st.columns(2)
+                    with col_calc1:
+                        st.info(f"💰 **Stara**: ${current_total_premium:.2f} total")
+                        st.caption(f"${current_premium_per_share:.3f} × {contracts} × 100")
+                    with col_calc2:
+                        st.success(f"💰 **Nowa**: ${new_total_premium:.2f} total")
+                        st.caption(f"${new_premium_per_share:.3f} × {contracts} × 100")               
                 
                 # Nowa data expiry
                 from datetime import datetime, date
@@ -2180,8 +2209,8 @@ def show_cc_edit_section():
                     changes = {}
                     if new_strike != cc['strike_usd']:
                         changes['strike_usd'] = new_strike
-                    if new_premium != cc['premium_sell_usd']:
-                        changes['premium_sell_usd'] = new_premium
+                    if new_premium_per_share != current_premium_per_share:
+                        changes['premium_sell_usd'] = new_total_premium  # Do bazy idzie total
                     if new_expiry.strftime('%Y-%m-%d') != cc['expiry_date']:
                         changes['expiry_date'] = new_expiry.strftime('%Y-%m-%d')
                     

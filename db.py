@@ -2311,7 +2311,7 @@ def save_covered_call_to_database(cc_data, lot_id=None):
                 return {'success': False, 'message': f'Nie udało się zarezerwować {remaining} akcji'}
 
             # 5) CASHFLOW – NETTO
-            gross_premium_usd = cc_data['premium_sell_usd'] * cc_data['contracts'] * 100
+            gross_premium_usd = cc_data['premium_sell_usd']  # już jest total!
             total_fees_usd = cc_data.get('broker_fee', 0.00) + cc_data.get('reg_fee', 0.00)
             net_premium_usd = gross_premium_usd - total_fees_usd
 
@@ -3790,13 +3790,93 @@ def delete_covered_call(cc_id: int, confirm_delete: bool = False):
             r2 = cur.fetchone()
             shares_released = int(r2['s'] if r2 and r2['s'] is not None else 0)
 
-        # Usuwanie w transakcji
+# 🔧 POPRAWKA: Napraw flow w delete_covered_call
+
+# Usuwanie w transakcji
         try:
             cur.execute("BEGIN")
 
-            # 1) Usuń rezerwacje (obie tabele — na wypadek, gdyby były wpisy w obu)
-            cur.execute("DELETE FROM cc_lot_mappings WHERE cc_id = ?", (cc_id,))
-            cur.execute("DELETE FROM options_cc_reservations WHERE cc_id = ?", (cc_id,))
+            # 1) ZWOLNIJ AKCJE i usuń rezerwacje
+            released = 0
+            shares_to_release = contracts * 100  # Wszystkie akcje z CC
+
+            # MAPOWANIA (cc_lot_mappings) - PRIORYTET
+            cur.execute("""
+                SELECT id, lot_id, shares_reserved
+                FROM cc_lot_mappings
+                WHERE cc_id = ?
+                ORDER BY id
+            """, (cc_id,))
+            
+            mappings = cur.fetchall() or []
+            for mapping in mappings:
+                mid = int(mapping['id'])
+                lot_id = int(mapping['lot_id'])
+                shares = int(mapping['shares_reserved'] or 0)
+                
+                if shares > 0:
+                    # 🔑 ZWIĘKSZ quantity_open
+                    cur.execute("""
+                        UPDATE lots 
+                        SET quantity_open = quantity_open + ? 
+                        WHERE id = ?
+                    """, (shares, lot_id))
+                    released += shares
+                    
+                    # Usuń mapping
+                    cur.execute("DELETE FROM cc_lot_mappings WHERE id = ?", (mid,))
+
+            # FALLBACK: options_cc_reservations
+            if released < shares_to_release:
+                cur.execute("""
+                    SELECT id, lot_id, qty_reserved
+                    FROM options_cc_reservations
+                    WHERE cc_id = ?
+                    ORDER BY id
+                """, (cc_id,))
+                
+                reservations = cur.fetchall() or []
+                for reservation in reservations:
+                    rid = int(reservation['id'])
+                    lot_id = int(reservation['lot_id'])
+                    qty = int(reservation['qty_reserved'] or 0)
+                    
+                    if qty > 0:
+                        # 🔑 ZWIĘKSZ quantity_open
+                        cur.execute("""
+                            UPDATE lots 
+                            SET quantity_open = quantity_open + ? 
+                            WHERE id = ?
+                        """, (qty, lot_id))
+                        released += qty
+                        
+                        # Usuń rezerwację
+                        cur.execute("DELETE FROM options_cc_reservations WHERE id = ?", (rid,))
+
+            # FIFO FALLBACK
+            if released < shares_to_release:
+                need = shares_to_release - released
+                cur.execute("""
+                    SELECT id, quantity_total, quantity_open 
+                    FROM lots 
+                    WHERE UPPER(ticker) = ? 
+                    ORDER BY buy_date ASC, id ASC
+                """, (ticker.upper(),))
+                
+                for lot_id, qty_total, qty_open in cur.fetchall() or []:
+                    if need <= 0:
+                        break
+                    potentially_blocked = int(qty_total or 0) - int(qty_open or 0)
+                    if potentially_blocked <= 0:
+                        continue
+                    take = min(potentially_blocked, need)
+                    cur.execute("""
+                        UPDATE lots 
+                        SET quantity_open = quantity_open + ? 
+                        WHERE id = ?
+                    """, (take, lot_id))
+                    need -= take
+                    released += take
 
             # 2) Usuń powiązane cashflow
             cur.execute("""
@@ -3807,7 +3887,33 @@ def delete_covered_call(cc_id: int, confirm_delete: bool = False):
             # 3) Usuń CC
             cur.execute("DELETE FROM options_cc WHERE id = ?", (cc_id,))
 
+            # 4) COMMIT
             cur.execute("COMMIT")
+            conn.close()
+
+            # 5) RETURN (NA KOŃCU!)
+            return {
+                'success': True,
+                'message': f'CC #{cc_id} usunięte. Zwolniono {released} akcji {ticker}',
+                'details': {
+                    'cc_id': cc_id,
+                    'ticker': ticker,
+                    'contracts': contracts,
+                    'shares_released': released
+                }
+            }
+
+        except Exception as e:
+            try:
+                cur.execute("ROLLBACK")
+            except:
+                pass
+            try:
+                conn.close()
+            except:
+                pass
+            return {'success': False, 'message': f'Błąd usuwania CC #{cc_id}: {str(e)}'}
+    
         except Exception as txe:
             try: cur.execute("ROLLBACK")
             except Exception: pass
@@ -3960,7 +4066,7 @@ def update_covered_call(cc_id, **kwargs):
         # Pobierz aktualne dane (rozszerzone o opłaty pod korektę cashflow)
         cur.execute("""
             SELECT id, ticker, contracts, status, premium_sell_usd, premium_sell_pln,
-                   strike_usd, expiry_date, fx_open,
+                   strike_usd, expiry_date, open_date, fx_open,
                    COALESCE(broker_fee_sell_usd, 0.0) AS broker_fee_sell_usd,
                    COALESCE(reg_fee_sell_usd, 0.0)     AS reg_fee_sell_usd
             FROM options_cc
@@ -3981,6 +4087,7 @@ def update_covered_call(cc_id, **kwargs):
             'premium_sell_pln': float(r['premium_sell_pln'] or 0.0) if r['premium_sell_pln'] is not None else None,
             'strike_usd': float(r['strike_usd'] or 0.0),
             'expiry_date': r['expiry_date'],
+            'open_date': r['open_date'],    
             'fx_open': float(r['fx_open'] or 0.0),
             'broker_fee_sell_usd': float(r['broker_fee_sell_usd'] or 0.0),
             'reg_fee_sell_usd': float(r['reg_fee_sell_usd'] or 0.0),
@@ -3997,6 +4104,7 @@ def update_covered_call(cc_id, **kwargs):
             'strike_usd': 'strike_usd',
             'expiry_date': 'expiry_date',
             'premium_sell_usd': 'premium_sell_usd',
+            'open_date': 'open_date'
         }
 
         fields_to_update = []
@@ -4661,6 +4769,10 @@ def get_closed_cc_analysis():
             # Jeśli brak alokacji (historyczne rekordy), załóż nominalne udziały i koszt bazowy ~0 (yield wtedy 0)
             if total_alloc_shares == 0:
                 total_alloc_shares = shares_nominal
+                # DODAJ FALLBACK DLA COST BASIS:
+                if total_cost_basis_pln == 0:
+                    # Dla historycznych CC bez mapowań - użyj premium jako przybliżony koszt
+                    total_cost_basis_pln = premium_sell_pln * 5  # zakładamy ~20% yield
 
             # P/L w PLN (jeśli brak – wylicz)
             recorded_pl_pln = float(r["pl_pln"] or 0.0) if r["pl_pln"] is not None else None
@@ -4685,7 +4797,7 @@ def get_closed_cc_analysis():
                 outcome_text = "Bought Back"
 
             # Yields na realnym koszcie bazowym
-            premium_yield_pct = (net_premium_pln / total_cost_basis_pln * 100.0) if total_cost_basis_pln > 0 else 0.0
+            premium_yield_pct = (pl_pln / total_cost_basis_pln * 100.0) if total_cost_basis_pln > 0 else 0.0
             annualized_yield_pct = (premium_yield_pct * 365.0 / days_held) if days_held > 0 else 0.0
 
             out.append({
@@ -5724,6 +5836,7 @@ def partial_buyback_covered_call_with_mappings(cc_id, contracts_to_buyback, buyb
         prem_sell_usd= float(r['premium_sell_usd'] or 0.0)
         prem_sell_pln= float(r['premium_sell_pln'] or 0.0)
         lot_linked_id = r['lot_linked_id'] if 'lot_linked_id' in r.keys() else None  # 🆕 DODAJ TĘ LINIĘ!
+        
 
         # --- data + NBP D-1
         if hasattr(buyback_date, 'strftime'):
@@ -5741,6 +5854,26 @@ def partial_buyback_covered_call_with_mappings(cc_id, contracts_to_buyback, buyb
             fx_close_date = (pd.to_datetime(buyback_date_str) - pd.DateOffset(days=1)).strftime('%Y-%m-%d')
         except Exception:
             fx_close_date = buyback_date_str
+        
+        # DODAJ TUTAJ:
+        # 🆕 WALIDACJA DATY - nie można odkupić przed sprzedażą!
+        try:
+            from datetime import datetime as _dt
+            if isinstance(open_date, str):
+                open_dt = _dt.strptime(open_date, '%Y-%m-%d').date()
+            else:
+                open_dt = open_date
+                
+            buyback_dt = _dt.strptime(buyback_date_str, '%Y-%m-%d').date()
+            
+            print(f'🔍 DEBUG: open_dt={open_dt}, buyback_dt={buyback_dt}')
+                
+            if buyback_dt < open_dt:
+                print(f'❌ BŁĄD: {buyback_dt} < {open_dt}')
+                return {'success': False, 'message': f'❌ Nie można odkupić CC przed jej sprzedażą! Sprzedane: {open_date}, buyback: {buyback_date_str}'}
+        except Exception as e:
+            print(f'❌ DEBUG EXCEPTION: {e}')
+            return {'success': False, 'message': f'❌ Błąd walidacji dat: {e}'}
 
         fx_close = get_fx_rate_for_date(fx_close_date)
         if not fx_close or fx_close <= 0:
@@ -5819,14 +5952,24 @@ def partial_buyback_covered_call_with_mappings(cc_id, contracts_to_buyback, buyb
 
             # C) zwolnij rezerwacje I ZWIĘKSZ quantity_open
             to_release = shares_to_buyback
+
+            # 🆕 JEŚLI JEST lot_linked_id - UŻYWAJ TYLKO TEGO!
             if lot_linked_id:
                 try:
                     print(f'🔧 DEBUG: Zwiększam quantity_open LOT #{lot_linked_id} o {shares_to_buyback} (lot_linked_id)')
                     cur.execute("UPDATE lots SET quantity_open = quantity_open + ? WHERE id = ?", (shares_to_buyback, lot_linked_id))
+                    
+                    # USUŃ WSZYSTKIE REZERWACJE DLA TEGO CC
+                    cur.execute("DELETE FROM cc_lot_mappings WHERE cc_id = ?", (cc_id,))
+                    cur.execute("DELETE FROM options_cc_reservations WHERE cc_id = ?", (cc_id,))
+                    
+                    to_release = 0  # 🔑 WYZERUJ - już zwolnione!
                 except Exception as e:
-                    print(f'❌ Błąd zwiększania quantity_open dla LOT #{lot_linked_id}: {e}')            
+                    print(f'❌ Błąd zwiększania quantity_open dla LOT #{lot_linked_id}: {e}')
 
-            if has_cc_map and to_release > 0:
+            # TYLKO JEŚLI BRAK lot_linked_id - UŻYJ MAPOWAŃ
+            if to_release > 0 and has_cc_map:
+                # reszta istniejącego kodu z mapowaniami...
                 # najpierw cc_lot_mappings
                 cur.execute("""
                     SELECT id, lot_id, shares_reserved

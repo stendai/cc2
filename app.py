@@ -27,6 +27,9 @@ def main():
         initial_sidebar_state="expanded"
     )
     
+    # 🎨 ŁADOWANIE NIESTANDARDOWEGO CSS
+    load_css('static/style.css')
+    
     # Inicjalizacja bazy danych
     if 'db_initialized' not in st.session_state:
         with st.spinner("Inicjalizacja bazy danych..."):
@@ -273,6 +276,14 @@ def show_placeholder(module_name, icon, description):
             st.warning(f"⚠️ Nie można sprawdzić gotowości: {e}")
     else:
         st.info("⏳ **OCZEKUJE** - Będzie dostępny po ukończeniu wcześniejszych etapów")
+
+def load_css(file_name):
+    """Ładuje niestandardowy CSS z pliku"""
+    try:
+        with open(file_name) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.warning(f"⚠️ Plik CSS {file_name} nie został znaleziony")
 
 if __name__ == "__main__":
     main()

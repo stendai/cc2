@@ -1,9 +1,9 @@
 # SPECYFIKACJA KOMPLETNA: STREAMLIT COVERED CALL DASHBOARD
 ## Zarządzanie portfelem opcji pokrytych z rozliczeniami podatkowymi PL
 
-**Status: 70/110 punktów ukończone (64%)**  
+**Status: 62/100 punktów ukończone (62%)**  
 **Ostatnia aktualizacja: 2025-01-26**  
-**Aktualny milestone: PUNKT 70 - Ukończenie ETAPU 4 Options**
+**Aktualny milestone: PUNKT 62-63 - Poprawki yield calculations**
 
 ---
 
@@ -139,23 +139,23 @@
 
 ### Punkty 61-65: Options - blokady i walidacje ✅
 61. ✅ Implementacja blokady sprzedaży akcji pod otwartymi CC
-62. ✅ Rozszerzenie walidacji w UI stocks z szczegółowymi komunikatami
-63. ✅ Dodanie przycisków usuwania błędnych CC (z automatycznym zwalnianiem rezerwacji)
-64. ✅ Implementacja edycji parametrów CC + usuwania rekordów testowych
-65. ✅ Usunięcie niepotrzebnej funkcji Roll (buyback + nowa sprzedaż oddzielnie)
+62. ✅ **NAPRAWIONY** - Poprawka kalkulacji yield w historii CC (premium_sell_usd → total)
+63. ✅ **NAPRAWIONY** - Usunięcie annualized yield dla zamkniętych CC (pozostały tylko zwykły yield)
+64. ✅ Dodanie przycisków usuwania błędnych CC (z automatycznym zwalnianiem rezerwacji)
+65. ⏳ Implementacja edycji parametrów CC + usuwania rekordów testowych
 
-### Punkty 66-70: Options - UI i finalizacja ✅
+### Punkty 66-70: Options - UI i finalizacja 🔄
 66. ✅ Implementacja zaawansowanych tabel otwartych CC z rozbiciami po LOT-ach
 67. ✅ Implementacja tabel zamkniętych CC z P/L PLN i kursami open/close
-68. ✅ Dodanie filtrów zaawansowanych (status, ticker, zakresy dat)
-69. ✅ Implementacja eksportu options do CSV + narzędzia cleanup
-70. ✅ Testowanie pełnej funkcjonalności modułu options + finalizacja profesjonalnego UI
+68. ✅ **CLEANUP** - Usunięto wszystkie komunikaty deweloperskie z UI
+69. ⏳ Implementacja eksportu options do CSV + narzędzia cleanup
+70. ⏳ Testowanie pełnej funkcjonalności modułu options + finalizacja profesjonalnego UI
 
-**Status ETAP 4**: ✅ **KOMPLETNY** - Moduł Options z pełną funkcjonalnością CC!
+**Status ETAP 4**: 🔄 **62/70 ukończone (89%)** - Options prawie gotowe!
 
 ---
 
-## 🔗 ETAP 5: MODUŁ CC CHAINS - ŁAŃCUCHY OPCYJNE (punkty 71-85) 🆕 NOWY!
+## 💰 ETAP 5: MODUŁ CC CHAINS - ŁAŃCUCHY OPCYJNE (punkty 71-85) 🆕 PLANOWANY
 
 ### Punkty 71-75: CC Chains - struktura i logika podstawowa ⏳
 71. ⏳ Utworzenie tabeli cc_chains w bazie danych (id, ticker, start_date, end_date, status)
@@ -235,105 +235,144 @@
 
 ---
 
+## 🗑️ NOWE FUNKCJONALNOŚCI - ZARZĄDZANIE DANYMI
+
+### **Dodane do specyfikacji w trakcie realizacji:**
+
+#### **PUNKT 62-63: NAPRAWKI YIELD CALCULATIONS (ETAP 4)** ✅
+- 🔧 **Poprawka premium_sell_usd** - teraz zapisuje total za wszystkie kontrakty (nie per kontrakt)
+- 🔧 **Poprawka premium_sell_pln** - teraz zapisuje brutto (nie netto po prowizjach)
+- 🚫 **Usunięcie annualized yield** z historii CC - pozostał tylko zwykły yield %
+- 📊 **Logiczna kalkulacja** - yield bazuje na rzeczywistym P/L vs premium sprzedaży
+- ✅ **Sensowne metryki** - np. -20% zamiast absurdalnych -7300% p.a.
+
+#### **PUNKT 64-65: Zarządzanie błędami (ETAP 4)**
+- 🗑️ **Usuwanie błędnych operacji** w każdym module (CC, stocks, cashflows, dividends)
+- 🔄 **Edycja parametrów** przed zapisem
+- ⚠️ **Potwierdzenia bezpieczeństwa** przed usunięciem
+- 🧹 **Cleanup rekordów testowych** (bulk operations)
+- 🔒 **Zabezpieczenia** przed przypadkowym usunięciem
+
+#### **PUNKT 67-68: Oczyszczanie UI (ETAP 4)** ✅
+- 🚫 **Usunięto komunikaty "PUNKT X UKOŃCZONY"** z wszystkich modułów
+- 🚫 **Usunięto testowe buttony** i debug info
+- 🚫 **Usunięto szczegóły implementacyjne** z UI
+- ✨ **Profesjonalne komunikaty** zamiast deweloperskich
+- 📱 **Responsive design** dla różnych urządzeń
+
+#### **PUNKT 85-86: Zaawansowane zarządzanie (ETAP 6)** ⏳
+- 🗄️ **Backup/restore** bazy danych
+- 🧹 **Cleanup narzędzia** (usuwanie starych danych)
+- 🔍 **Audit trail** (kto, kiedy, co usunął)
+- 📦 **Bulk operations** (masowe usuwanie/edytowanie)
+- 🚚 **Export/import** danych
+
+#### **PUNKT 98-99: Finalna profesjonalizacja (ETAP 7)** ⏳
+- 🎨 **Usunięcie WSZYSTKICH** pozostałości deweloperskich
+- ✨ **Finalne UI/UX** na poziomie produkcyjnym
+- 📋 **Instrukcje użytkownika** zamiast dokumentacji technicznej
+- 🏆 **Production-ready release**
+
+---
+
 ## 🎯 KRYTERIA AKCEPTACJI
 
 ### ✅ Must-have (MVP)
 - [x] Każda operacja ma utrwalony kurs NBP D-1 i kwoty PLN
 - [x] FIFO sprzedaży działa i pokazuje rozbicie po LOT-ach  
 - [x] Blokada sprzedaży akcji pod otwartym CC
-- [x] Pełne operacje CC (sprzedaż, buyback, expiry) z P/L PLN
-- [ ] **CC Chains analytics** - tracking strategii opcyjnych 🆕
+- [x] **Poprawne kalkulacje yield** - realistyczne % zwroty z operacji CC
+- [ ] Rolowanie jako dwie osobne operacje
 - [ ] Dashboard z equity (USD), yieldami i alertami
 - [ ] Taxes z rozbiciami PIT-38/PIT-36 i eksportami CSV
 - [x] Kursy NBP pobierane automatycznie z możliwością korekty
 
 ### 🎯 Nice-to-have (Future)
 - [ ] Import danych z IBKR/Lynx
-- [ ] Zaawansowane wykresy (Plotly) 
+- [ ] Zaawansowane wykresy (Plotly)
 - [ ] Corporate actions handling
 - [ ] Multi-account support
 - [ ] Mobile-responsive UI
-- [ ] **Chain strategy recommendations** (AI-powered) 🆕
 
 ---
 
 ## 📊 PROGRESS TRACKING
 
-**Aktualny stan: 70/110 punktów (64%)**
+**Aktualny stan: 62/110 punktów (56%)**
 
 ### Status per etap:
 - ✅ **ETAP 1** (1-15): 15/15 = 100% ✅
 - ✅ **ETAP 2** (16-30): 15/15 = 100% ✅  
 - ✅ **ETAP 3** (31-50): 20/20 = 100% ✅
-- ✅ **ETAP 4** (51-70): 20/20 = 100% ✅ 🎉
+- 🔥 **ETAP 4** (51-70): 12/20 = 60% 🔄
 - 🆕 **ETAP 5** (71-85): 0/15 = 0% ⏳ CC CHAINS
 - ⏳ **ETAP 6** (86-95): 0/10 = 0% ⏳ DIVIDENDS
 - ⏳ **ETAP 7** (96-105): 0/10 = 0% ⏳ TAXES  
 - ⏳ **ETAP 8** (106-110): 0/5 = 0% ⏳ DASHBOARD
 
 ### Najbliższe milestone:
-🎯 **PUNKT 71**: Start CC Chains - tabela w bazie danych
-🎯 **PUNKT 85**: Ukończenie ETAPU 5 = 77% projektu!
+🎯 **PUNKT 65**: Finalizacja edycji CC
+🎯 **PUNKT 70**: Ukończenie ETAPU 4 = 64% projektu!
+🎯 **PUNKT 85**: CC Chains kompletne = 77% projektu! 🆕
 
 ---
 
 ## 🚀 PLAN REALIZACJI - NASTĘPNE KROKI
 
-### **Za 1 tydzień (punkty 71-75):**
-- 🔗 Struktura CC Chains w bazie
-- 🔗 Auto-detection algorytm
-- 🔗 Podstawowe UI chains
+### **Za 1 tydzień (punkty 65-70):**
+- Finalizacja edycji parametrów CC
+- Eksport options do CSV
+- Testowanie pełnej funkcjonalności
+- **UKOŃCZENIE ETAPU 4 = 64% projektu!**
 
-### **Za 2 tygodnie (punkty 76-85):**
-- 📊 Chain analytics i kalkulacje
-- 📈 Performance tracking
-- **UKOŃCZENIE ETAPU 5 = 77% projektu!**
+### **Za 2 tygodnie (punkty 71-85):**
+- 🆕 **CC Chains** - tabela, auto-detection, UI
+- Zaawansowana analiza strategii opcyjnych
+- **UKOŃCZENIE ETAPU 5 = 77% projektu!** 🔗
 
 ### **Za 4 tygodnie (punkty 86-95):**
-- 💰 Pełny moduł Dividends
+- Pełny moduł Dividends  
 - **UKOŃCZENIE ETAPU 6 = 86% projektu!**
 
 ### **Za 6 tygodni (punkty 96-105):**
-- 📋 Pełny moduł Taxes
+- Pełny moduł Taxes
 - **UKOŃCZENIE ETAPU 7 = 95% projektu!**
 
 ### **Za 8 tygodni (punkty 106-110):**
-- 📈 Dashboard, finalizacja
+- Dashboard, Charts, finalizacja
 - **🏆 RELEASE PRODUCTION-READY = 100%!**
 
 ---
 
-## 🆕 NOWE FUNKCJONALNOŚCI - CC CHAINS
+## 🛠️ NAPRAWKI WYKONANE (26.01.2025)
 
-### **Co to jest CC Chain:**
-**Chain (łańcuch)** = grupa powiązanych CC na tym samym tickerze, gdzie każde kolejne CC jest wystawiane po zamknięciu poprzedniego (buyback/expiry).
+### **PUNKT 62: Naprawa kalkulacji premium_sell_usd/pln** ✅
+**Problem:** Premium zapisywane było per kontrakt (5$) zamiast total (500$)
+**Rozwiązanie:** Poprawione w `show_cc_sell_preview()` w options.py:
+```python
+# PRZED (błędne):
+cc_data = {'premium_sell_usd': premium_received}  # per kontrakt
 
-**Przykład WOLF Chain:**
-```
-🐺 WOLF Chain #1:
-├── CC #5: 25.11 → 02.12 (buyback) = -$0.44
-├── CC #8: 02.12 → 15.12 (expiry) = +$1.20  
-├── CC #12: 16.12 → 03.01 (buyback) = +$0.30
-└── CC #15: 04.01 → running...
-
-📊 Chain Stats:
-💰 Total P/L: +$1.06
-📅 Duration: 40 dni
-📈 Annualized: +23.4%
+# PO (poprawne):
+cc_data = {'premium_sell_usd': total_premium_usd}  # total za wszystkie
 ```
 
-### **Chain Analytics:**
-- 🔗 **Chain Linking** - automatyczne lub ręczne grupowanie CC
-- 📊 **Performance Metrics** - P/L, duration, success rate, annualized return
-- 🏆 **Chain Ranking** - najlepsze/najgorsze strategies  
-- 📈 **Strategy Insights** - które strike levels działają najlepiej
-- ⏰ **Timing Analysis** - optymalne momenty buyback vs expiry
+### **PUNKT 63: Usunięcie absurdalnych yield p.a. z historii CC** ✅
+**Problem:** Historia CC pokazywała -7300% p.a. dla 1-dniowych operacji
+**Rozwiązanie:** Usunięto linię z annualized yield w `show_cc_history_tab()`:
+```python
+# USUNIĘTO:
+st.write(f"📈 **Yield p.a.**: {premium_yield * 365.0 / days_held:.1f}%")
 
-**To będzie MEGA feature dla profesjonalnego trackingu strategii opcyjnych!** 🚀🔥
+# ZOSTAŁO tylko:
+st.write(f"📈 **Yield**: {premium_yield:.1f}%")
+```
+
+**Rezultat:** Teraz historia CC pokazuje sensowne metryki jak -20% zamiast -7300% p.a.
 
 ---
 
 **Ostatnia aktualizacja**: 2025-01-26  
 **Przez**: Assistant Claude  
-**Status**: ETAP 4 ukończony! Następny: CC CHAINS 🔗  
-**Nowe moduły**: 9 zakładek (dodano CC Chains)
+**Status**: PUNKT 62-63 ukończone - Yield calculations naprawione!  
+**Następny milestone**: PUNKT 65-70 - Finalizacja ETAPU 4
