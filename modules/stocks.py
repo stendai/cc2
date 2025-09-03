@@ -731,7 +731,7 @@ def show_sales_tab():
                 
                 st.metric(
                     label="📦 Łącznie posiadane",
-                    value=f"{cc_error['total_available'] + cc_error['reserved_for_cc']}",
+                    value=f"{db.get_total_quantity(ticker_clean)}",
                     help="Wszystkie akcje w portfelu"
                 )
                 
@@ -1020,34 +1020,32 @@ def show_sell_preview_with_fifo(ticker, quantity, sell_price, sell_date, broker_
         net_proceeds_usd = gross_proceeds - total_fees
         
         # 🎯 PUNKT 37: Pobierz kurs NBP D-1 dla DATY SPRZEDAŻY
-        nbp_key = f"sell_nbp_rate_{ticker}_{sell_date}"
-        if nbp_key not in st.session_state:
-            try:
-                nbp_result = nbp_api_client.get_usd_rate_for_date(sell_date)
-                
-                if isinstance(nbp_result, dict) and 'rate' in nbp_result:
-                    sell_fx_rate = nbp_result['rate']
-                    sell_fx_date = nbp_result.get('date', sell_date)
-                else:
-                    sell_fx_rate = float(nbp_result)
-                    sell_fx_date = sell_date
-                    
-                st.session_state[nbp_key] = sell_fx_rate
-                fx_success = True
-                
-            except Exception as e:
-                st.error(f"❌ Błąd pobierania kursu NBP dla sprzedaży: {e}")
-                sell_fx_rate = 4.0  # Fallback
-                sell_fx_date = sell_date
-                st.session_state[nbp_key] = sell_fx_rate
-                fx_success = False
-        else:
-            # Używaj cached rate
-            sell_fx_rate = st.session_state[nbp_key]
-            sell_fx_date = sell_date
-            fx_success = True
-        
+        # 🎯 PUNKT 37: Pobierz kurs NBP D-1 dla daty sprzedaży (bez magicznego 4.0)
+        from datetime import datetime, timedelta
+
+        sell_date_str = sell_date.strftime('%Y-%m-%d') if hasattr(sell_date, 'strftime') else str(sell_date)
+        fx_base_date = datetime.strptime(sell_date_str, '%Y-%m-%d').date() - timedelta(days=1)
+
+        # 1) Spróbuj pobrać kurs przez wspólną funkcję (API NBP + cache w fx_rates)
+        sell_fx_rate = db.get_fx_rate_for_date(sell_date_str)   # funkcja sama robi D-1 po stronie klienta
+        sell_fx_date = fx_base_date
+
+        # 2) Fallback: ostatni znany kurs z bazy (do fx_base_date)
+        if not sell_fx_rate:
+            latest = db.get_latest_fx_rate('USD', before_date=fx_base_date)
+            if latest:
+                sell_fx_rate = float(latest['rate'])
+                sell_fx_date = latest['date']
+            else:
+                st.error(f"❌ Brak kursu NBP dla {fx_base_date} i brak fallbacku w bazie FX.")
+                return None
+
+        fx_success = True
+        st.caption(f"NBP D-1: {sell_fx_date} @ {sell_fx_rate:.4f}")
+
+        # 3) Przeliczenie wpływów na PLN (po wyliczeniu net_proceeds_usd wyżej)
         proceeds_pln = net_proceeds_usd * sell_fx_rate
+
         
         # 🚨 NAPRAWKA: Pobierz LOT-y z walidacją temporalną
         lots = db.get_lots_by_ticker(ticker, only_open=True, sell_date=sell_date)

@@ -95,135 +95,168 @@ def display_migration_status(status):
 # NAPRAWKA: Zamień funkcję show_active_chains_tab() w pages/cc_chains.py
 
 def show_active_chains_tab():
-    """PUNKT 81: Tab Active Chains - NAPRAWIONA WERSJA z prawdziwymi danymi"""
-    st.subheader("🔗 Active Chains")
+    """PUNKT 81: Active LOT Chains - kompletnie przepisane LOT-focused"""
+    st.subheader("📦 LOT Chains - Historia życia LOT-ów akcji")
+    st.markdown("*Każdy LOT = jeden chain. Pokazujemy lifecycle: zakup → CC → CC → ... → sprzedaż*")
     
     try:
-        # Pobierz chains z bazy
-        chains = db.get_cc_chains_summary()
+        lot_chains = db.get_lot_chains_summary()
         
-        if not chains:
-            st.warning("📝 Brak chains w bazie. Uruchom Auto-Detection żeby je utworzyć.")
-            return
-        
-        st.success(f"✅ Znaleziono {len(chains)} chains w bazie")
-        
-        # Wyświetl każdy chain
-        for i, chain in enumerate(chains):
+        if not lot_chains:
+            st.warning("📝 Brak LOT chains w bazie. Uruchom Auto-Detection żeby je utworzyć.")
             
-            # Container per chain
-            with st.container():
-                
-                # Header chain
-                col_header1, col_header2, col_header3 = st.columns([2, 1, 1])
-                
-                with col_header1:
-                    status_icon = "🟢" if chain['status'] == 'active' else "🔴"
-                    st.markdown(f"### {status_icon} {chain.get('chain_name', 'Unnamed Chain')}")
-                    st.caption(f"Chain #{chain['id']} | LOT #{chain['lot_id']}")
-                
-                with col_header2:
-                    st.metric("P/L PLN", f"{chain.get('total_pl_pln', 0):.2f} zł")
-                
-                with col_header3:
-                    st.metric("CC Count", f"{chain.get('cc_count', 0)}")
-                
-                # Szczegóły chain
-                col_details1, col_details2, col_details3 = st.columns(3)
-                
-                with col_details1:
-                    st.write(f"**📦 LOT Info:**")
-                    st.write(f"Total: {chain.get('lot_total', 0)} shares")
-                    st.write(f"Open: {chain.get('lot_open', 0)} shares")
-                    st.write(f"Buy Date: {chain.get('lot_buy_date', 'N/A')}")
-                
-                with col_details2:
-                    st.write(f"**🎯 Chain Stats:**")
-                    st.write(f"Start: {chain.get('start_date', 'N/A')}")
-                    st.write(f"End: {chain.get('end_date', 'Active')}")
-                    st.write(f"Open CC: {chain.get('open_cc_count', 0)}")
-                
-                with col_details3:
-                    st.write(f"**💰 Performance:**")
-                    premium = chain.get('total_premium_pln', 0)
-                    st.write(f"Premium: {premium:.2f} zł")
-                    
-                    # Kalkulacja yield (uproszczona)
-                    if premium > 0:
-                        yield_pct = (chain.get('total_pl_pln', 0) / premium) * 100
-                        st.write(f"Yield: {yield_pct:.1f}%")
-                    else:
-                        st.write("Yield: N/A")
-                
-                # Pobierz CC dla tego chain
-                try:
-                    conn = db.get_connection()
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("""
-                        SELECT id, contracts, strike_usd, premium_sell_usd, 
-                               open_date, expiry_date, status, pl_pln
-                        FROM options_cc
-                        WHERE chain_id = ?
-                        ORDER BY open_date DESC
-                    """, (chain['id'],))
-                    
-                    cc_in_chain = cursor.fetchall()
-                    conn.close()
-                    
-                    if cc_in_chain:
-                        st.markdown("**🎯 CC w tym chain:**")
-                        
-                        # Tabela CC
-                        cc_df_data = []
-                        for cc in cc_in_chain:
-                            cc_id, contracts, strike, premium, open_date, expiry, status, pl_pln = cc
-                            
-                            status_icon = "🟢" if status == 'open' else "🔴"
-                            pl_formatted = f"{pl_pln:.2f} zł" if pl_pln else "pending"
-                            
-                            cc_df_data.append({
-                                'CC': f"#{cc_id}",
-                                'Status': f"{status_icon} {status}",
-                                'Contracts': contracts,
-                                'Strike': f"${strike}",
-                                'Premium': f"${premium}",
-                                'Open': open_date,
-                                'Expiry': expiry,
-                                'P/L': pl_formatted
-                            })
-                        
-                        st.dataframe(pd.DataFrame(cc_df_data), use_container_width=True)
-                    else:
-                        st.warning("⚠️ Chain bez CC - błąd danych")
-                
-                except Exception as e:
-                    st.error(f"❌ Błąd ładowania CC dla chain #{chain['id']}: {e}")
-                
-                st.markdown("---")  # Separator między chains
-        
-    except Exception as e:
-        st.error(f"❌ Błąd ładowania active chains: {e}")
-        
-        # DEBUG fallback
-        st.markdown("### 🔍 DEBUG:")
-        try:
+            # Pokaż ile LOT-ów z CC czeka na chains
             conn = db.get_connection()
             cursor = conn.cursor()
-            
-            cursor.execute("SELECT COUNT(*) FROM cc_chains")
-            chain_count = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM options_cc WHERE chain_id IS NOT NULL")
-            cc_with_chains = cursor.fetchone()[0]
-            
-            st.write(f"Chains in DB: {chain_count}")
-            st.write(f"CC with chains: {cc_with_chains}")
-            
+            cursor.execute("""
+                SELECT COUNT(DISTINCT lot_linked_id)
+                FROM options_cc 
+                WHERE lot_linked_id IS NOT NULL AND chain_id IS NULL
+            """)
+            unlinked_lots = cursor.fetchone()[0]
             conn.close()
             
-        except Exception as debug_e:
-            st.error(f"Debug też failed: {debug_e}")
+            if unlinked_lots > 0:
+                st.info(f"💡 {unlinked_lots} LOT-ów z CC czeka na utworzenie chains")
+            
+            return
+        
+        # Sortuj: aktywne LOT-y na górze, potem według ROI
+        active_lots = [lot for lot in lot_chains if lot['lot_status'] == 'active']
+        sold_lots = [lot for lot in lot_chains if lot['lot_status'] == 'sold']
+        
+        active_lots.sort(key=lambda x: x.get('roi_percent', 0), reverse=True)
+        sold_lots.sort(key=lambda x: x.get('roi_percent', 0), reverse=True)
+        
+        sorted_lots = active_lots + sold_lots
+        
+        st.success(f"✅ {len(active_lots)} aktywnych + {len(sold_lots)} sprzedanych LOT chains")
+        
+        # OVERVIEW METRICS
+        col_overview1, col_overview2, col_overview3, col_overview4 = st.columns(4)
+        
+        total_investment = sum(lot.get('lot_cost_pln', 0) for lot in lot_chains)
+        total_pl = sum(lot.get('total_chain_pl_pln', 0) for lot in lot_chains)
+        total_premium = sum(lot.get('total_cc_premium_pln', 0) for lot in lot_chains)
+        
+        with col_overview1:
+            st.metric("💰 Total Investment", f"{total_investment:,.0f} PLN")
+        
+        with col_overview2:
+            st.metric("📈 Total P/L", f"{total_pl:+,.0f} PLN")
+        
+        with col_overview3:
+            avg_roi = (total_pl / total_investment * 100) if total_investment > 0 else 0
+            st.metric("📊 Avg ROI", f"{avg_roi:+.1f}%")
+        
+        with col_overview4:
+            st.metric("💸 CC Premium", f"{total_premium:,.0f} PLN")
+        
+        st.markdown("---")
+        
+        # LOT CHAINS - jeden per LOT
+        for lot in sorted_lots:
+            
+            # LOT STATUS HEADER
+            if lot['lot_status'] == 'active':
+                status_badge = "🟢 **AKTYWNY LOT**"
+                status_color = "green"
+            else:
+                status_badge = "🔴 **LOT SPRZEDANY**"
+                status_color = "red"
+            
+            with st.container():
+                st.markdown(f"### {status_badge} - {lot['ticker']} LOT #{lot['lot_id']}")
+                
+                # LOT PODSTAWOWE INFO
+                col_lot_basic1, col_lot_basic2, col_lot_basic3 = st.columns(3)
+                
+                with col_lot_basic1:
+                    st.markdown("**📦 LOT Purchase:**")
+                    st.write(f"Date: {lot.get('lot_buy_date', 'N/A')}")
+                    st.write(f"Quantity: {lot.get('lot_quantity_total', 0)} shares")
+                    st.write(f"Price: ${lot.get('lot_buy_price_usd', 0):.2f}/share")
+                    st.write(f"**Cost: {lot.get('lot_cost_pln', 0):.0f} PLN**")
+                
+                with col_lot_basic2:
+                    st.markdown("**📊 Current Status:**")
+                    if lot['lot_status'] == 'active':
+                        st.write(f"Available: {lot.get('lot_quantity_open', 0)} shares")
+                        st.write(f"Reserved: {lot.get('lot_quantity_total', 0) - lot.get('lot_quantity_open', 0)} shares")
+                    else:
+                        st.write("Status: Sold")
+                        st.write("Available: 0 shares")
+                    st.write(f"Chain: {lot.get('chain_start_date', 'N/A')} → {lot.get('chain_end_date', 'Active')}")
+                
+                with col_lot_basic3:
+                    st.markdown("**💰 Performance:**")
+                    roi = lot.get('roi_percent', 0)
+                    total_pl = lot.get('total_chain_pl_pln', 0)
+                    
+                    if roi >= 0:
+                        st.success(f"ROI: +{roi:.1f}%")
+                        st.success(f"P/L: +{total_pl:.0f} PLN")
+                    else:
+                        st.error(f"ROI: {roi:.1f}%")
+                        st.error(f"P/L: {total_pl:.0f} PLN")
+                    
+                    premium = lot.get('total_cc_premium_pln', 0)
+                    st.write(f"CC Premium: {premium:.0f} PLN")
+                
+                # CC ACTIVITY TABLE
+                cc_list = lot.get('cc_list', [])
+                if cc_list:
+                    st.markdown("**📞 CC Activity na tym LOT-cie:**")
+                    
+                    cc_df_data = []
+                    for cc in cc_list:
+                        status_icon = {
+                            'open': '🟢',
+                            'expired': '✅', 
+                            'assigned': '📞',
+                            'bought_back': '🔴'
+                        }.get(cc.get('status', ''), '❓')
+                        
+                        pl_pln = cc.get('pl_pln', 0)
+                        pl_display = f"{pl_pln:+.0f} PLN" if pl_pln else "pending"
+                        
+                        cc_df_data.append({
+                            'CC ID': f"#{cc.get('id', 'N/A')}",
+                            'Status': f"{status_icon} {cc.get('status', 'unknown')}",
+                            'Contracts': cc.get('contracts', 0),
+                            'Strike': f"${cc.get('strike_usd', 0):.2f}",
+                            'Premium': f"${cc.get('premium_sell_usd', 0):.2f}",
+                            'Open Date': cc.get('open_date', 'N/A'),
+                            'Expiry': cc.get('expiry_date', 'N/A'),
+                            'P/L PLN': pl_display
+                        })
+                    
+                    st.dataframe(pd.DataFrame(cc_df_data), use_container_width=True)
+                else:
+                    st.info("Ten LOT nie ma jeszcze CC")
+                
+                # STOCK SALES TABLE (jeśli LOT sprzedany)
+                stock_sales = lot.get('stock_sales', [])
+                if stock_sales:
+                    st.markdown("**💸 Sprzedaże z tego LOT-a:**")
+                    
+                    sales_df_data = []
+                    for sale in stock_sales:
+                        sales_df_data.append({
+                            'Date': sale.get('sell_date', 'N/A'),
+                            'Quantity': sale.get('qty_from_lot', 0),
+                            'Price': f"${sale.get('sell_price_usd', 0):.2f}",
+                            'P/L PLN': f"{sale.get('pl_pln_portion', 0):+.0f}"
+                        })
+                    
+                    st.dataframe(pd.DataFrame(sales_df_data), use_container_width=True)
+                
+                st.markdown("---")
+        
+    except Exception as e:
+        st.error(f"❌ Błąd ładowania LOT chains: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 def show_chain_analytics_tab():
     """PUNKT 82: Tab Chain Analytics - placeholder"""
@@ -292,36 +325,58 @@ def show_chain_management_tab():
 # Zamień funkcję show_auto_detection_tab() na tę wersję z debug:
 
 def show_auto_detection_tab():
-    """PUNKT 74-75: Tab Auto-Detection z FULL DEBUG"""
-    st.subheader("🤖 Auto-Detection Algorithm")
-    st.info("🚧 **PUNKT 74-75** - Z debugiem błędów")
+    """PUNKT 74-75: Tab Auto-Detection - ZAKTUALIZOWANY dla LOT Chains"""
+    st.subheader("🤖 LOT Chains Auto-Detection")
+    st.info("🔗 **PUNKT 74-75** - Automatyczne tworzenie chains per LOT akcji")
     
-    # DEBUG: Sprawdź czy funkcja istnieje
+    # NOWY OPIS LOGIKI
+    st.markdown("""
+    ### 📦 **LOT Chain Concept:**
+    
+    **Chain = Kompletny lifecycle pojedynczego LOT-a akcji:**
+    1. 🛒 **Zakup LOT-a** (np. 100 KURA @ $10)
+    2. 📞 **CC #1** na tym LOT-cie → expire/assign/buyback
+    3. 📞 **CC #2** na tym samym LOT-cie → expire/assign/buyback  
+    4. 📞 **CC #3** na tym samym LOT-cie...
+    5. 💸 **Sprzedaż LOT-a** → **KONIEC CHAIN**
+    
+    **Jeden LOT = Jeden Chain** (bazuje na `lot_linked_id`)
+    """)
+    
+    # DEBUG: Sprawdź czy nowa funkcja istnieje
     st.markdown("### 🔍 DEBUG:")
     
     try:
-        # Test 1: Czy funkcja istnieje?
-        if hasattr(db, 'auto_detect_cc_chains'):
-            st.success("✅ Funkcja auto_detect_cc_chains istnieje")
+        # Test 1: Sprawdź dostępność funkcji
+        if hasattr(db, 'auto_detect_lot_chains'):
+            st.success("✅ Funkcja auto_detect_lot_chains istnieje")
+        elif hasattr(db, 'auto_detect_cc_chains'):
+            st.warning("⚠️ Używam starą funkcję auto_detect_cc_chains (do aktualizacji)")
         else:
-            st.error("❌ Funkcja auto_detect_cc_chains NIE ISTNIEJE!")
+            st.error("❌ Brak funkcji auto-detection!")
             st.stop()
         
-        # Test 2: Status przed testem
+        # Test 2: Status przed testem - ZAKTUALIZOWANE METRYKI
         col_debug1, col_debug2 = st.columns(2)
         
         with col_debug1:
             conn = db.get_connection()
             cursor = conn.cursor()
             
+            # CC bez chains
             cursor.execute("SELECT COUNT(*) FROM options_cc WHERE chain_id IS NULL")
             unlinked_cc = cursor.fetchone()[0]
             
-            cursor.execute("SELECT COUNT(*) FROM cc_chains")
-            total_chains = cursor.fetchone()[0]
+            # CC z lot_linked_id
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM options_cc 
+                WHERE chain_id IS NULL AND lot_linked_id IS NOT NULL
+            """)
+            cc_with_lots = cursor.fetchone()[0]
             
             st.metric("CC bez chains", unlinked_cc)
-            st.metric("Total chains", total_chains)
+            st.metric("CC z LOT-ami", cc_with_lots)
             
             conn.close()
         
@@ -329,19 +384,20 @@ def show_auto_detection_tab():
             conn = db.get_connection()
             cursor = conn.cursor()
             
-            cursor.execute("SELECT COUNT(*) FROM cc_lot_mappings")
-            total_mappings = cursor.fetchone()[0]
+            # Total chains
+            cursor.execute("SELECT COUNT(*) FROM cc_chains")
+            total_chains = cursor.fetchone()[0]
             
+            # LOT-y z CC (potencjalne chains)
             cursor.execute("""
-                SELECT COUNT(DISTINCT m.lot_id)
-                FROM cc_lot_mappings m
-                JOIN options_cc cc ON cc.id = m.cc_id
-                WHERE cc.chain_id IS NULL
+                SELECT COUNT(DISTINCT lot_linked_id)
+                FROM options_cc 
+                WHERE lot_linked_id IS NOT NULL AND chain_id IS NULL
             """)
-            lots_ready = cursor.fetchone()[0]
+            lots_needing_chains = cursor.fetchone()[0]
             
-            st.metric("Total mappings", total_mappings)
-            st.metric("LOT-y ready", lots_ready)
+            st.metric("Existing chains", total_chains)
+            st.metric("LOT-y ready", lots_needing_chains)
             
             conn.close()
     
@@ -350,98 +406,133 @@ def show_auto_detection_tab():
         import traceback
         st.code(traceback.format_exc())
     
-    # GŁÓWNY TEST z pełnym error handling
-    if st.button("🔍 Test Auto-Detection Algorithm (DEBUG)"):
-        st.markdown("### 🧪 FULL DEBUG AUTO-DETECTION:")
+    # GŁÓWNY TEST - ZAKTUALIZOWANY
+    if st.button("🔍 Test LOT Chains Auto-Detection"):
+        st.markdown("### 🧪 LOT CHAINS AUTO-DETECTION:")
         
         try:
-            with st.spinner("Testowanie z debugiem..."):
+            with st.spinner("Tworzenie LOT chains..."):
                 
-                # PRE-TEST: Pokaż dane wejściowe
-                with st.expander("📋 Dane przed testem", expanded=True):
+                # PRE-TEST: Pokaż LOT-y gotowe do chains
+                with st.expander("📋 LOT-y gotowe do chains", expanded=True):
                     conn = db.get_connection()
                     cursor = conn.cursor()
                     
-                    # CC bez chains
+                    # LOT-y z CC bez chains
                     cursor.execute("""
-                        SELECT cc.id, cc.ticker, cc.contracts, cc.status
-                        FROM options_cc cc
+                        SELECT DISTINCT 
+                            l.id as lot_id,
+                            l.ticker, 
+                            l.buy_date,
+                            l.quantity_open,
+                            COUNT(cc.id) as cc_count
+                        FROM lots l
+                        JOIN options_cc cc ON cc.lot_linked_id = l.id
                         WHERE cc.chain_id IS NULL
-                    """)
-                    unlinked_cc = cursor.fetchall()
-                    
-                    st.write(f"**CC bez chains ({len(unlinked_cc)}):**")
-                    for cc in unlinked_cc:
-                        st.write(f"   CC #{cc[0]}: {cc[1]} {cc[2]}x [{cc[3]}]")
-                    
-                    # LOT-y z mapowaniami
-                    cursor.execute("""
-                        SELECT DISTINCT m.lot_id, l.ticker, l.buy_date
-                        FROM cc_lot_mappings m
-                        JOIN lots l ON l.id = m.lot_id
-                        JOIN options_cc cc ON cc.id = m.cc_id
-                        WHERE cc.chain_id IS NULL
+                        GROUP BY l.id, l.ticker, l.buy_date, l.quantity_open
+                        ORDER BY l.ticker, l.buy_date
                     """)
                     lots_ready = cursor.fetchall()
                     
                     st.write(f"**LOT-y gotowe do chains ({len(lots_ready)}):**")
                     for lot in lots_ready:
-                        st.write(f"   LOT #{lot[0]}: {lot[1]} ({lot[2]})")
+                        status = "🟢 Active" if lot[3] > 0 else "🔴 Sold"
+                        st.write(f"   LOT #{lot[0]}: {lot[1]} ({lot[2]}) - {lot[4]} CC - {status}")
                     
                     conn.close()
                 
-                # WYWOŁAJ FUNKCJĘ
-                st.write("🤖 Wywołuję db.auto_detect_cc_chains()...")
+                # WYWOŁAJ NOWĄ FUNKCJĘ
+                st.write("🤖 Wywołuję auto-detection...")
                 
-                result = db.auto_detect_cc_chains()
+                # Użyj nowej funkcji jeśli dostępna, fallback do starej
+                if hasattr(db, 'auto_detect_lot_chains'):
+                    result = db.auto_detect_lot_chains()
+                else:
+                    result = db.auto_detect_cc_chains()  # Fallback
                 
-                st.write(f"📊 Wynik funkcji: {result}")
+                st.write(f"📊 Wynik: {result}")
                 
                 # SPRAWDŹ WYNIK
                 if result.get('success'):
                     st.success("✅ SUKCES!")
-                    st.write(f"   Chains created: {result.get('chains_created', 0)}")
-                    st.write(f"   CC assigned: {result.get('cc_assigned', 0)}")
-                    st.write(f"   Message: {result.get('message', 'brak')}")
+                    st.write(f"🔗 Chains created: **{result.get('chains_created', 0)}**")
+                    st.write(f"📞 CC assigned: **{result.get('cc_assigned', 0)}**")
+                    st.write(f"📦 LOT-y processed: **{result.get('lots_processed', 0)}**")
                     
-                    if result.get('chains_created', 0) > 0 or result.get('cc_assigned', 0) > 0:
+                    if 'details' in result:
+                        details = result['details']
+                        if 'active_chains' in details:
+                            st.info(f"🟢 Active chains: {details['active_chains']}")
+                        if 'closed_chains' in details:
+                            st.info(f"🔴 Closed chains: {details['closed_chains']}")
+                    
+                    st.success(f"💬 {result.get('message', '')}")
+                    
+                    if result.get('chains_created', 0) > 0:
                         st.balloons()
                         st.rerun()  # Odśwież stronę
                 else:
                     st.error("❌ BŁĄD!")
-                    st.write(f"   Message: {result.get('message', 'brak')}")
+                    st.error(f"💬 {result.get('message', 'Nieznany błąd')}")
+                    if 'error_details' in result:
+                        with st.expander("🔧 Szczegóły błędu"):
+                            st.code(result['error_details'])
                 
         except Exception as e:
             st.error(f"❌ Exception podczas testu: {e}")
             import traceback
             st.code(traceback.format_exc())
     
-    # Reszta funkcji bez zmian...
-    st.markdown("""
-    **CC Chain** = **WSZYSTKIE** CC na tym samym **LOT-cie akcji**
+    # INSTRUKCJA UŻYTKOWNIKA
+    st.markdown("---")
+    st.markdown("### 📚 Jak to działa:")
     
-    **Prosta logika:**
-    1. 📦 **Jeden LOT = Jeden Chain**
-    2. 🕐 **Bez ograniczeń czasowych** (możesz czekać tygodnie/miesiące)
-    3. ⏹️ **Chain kończy się gdy LOT sprzedany** (quantity_open = 0)
-    """)
+    col_info1, col_info2 = st.columns(2)
     
-    # Current CC status
+    with col_info1:
+        st.markdown("""
+        **🔗 LOT Chain Lifecycle:**
+        - Każdy LOT tworzy **jeden chain**
+        - Chain trackuje **wszystkie CC** na LOT-cie
+        - Chain kończy się przy **sprzedaży LOT-a**
+        """)
+    
+    with col_info2:
+        st.markdown("""
+        **📊 Chain Analytics:**
+        - **Total Premium** z wszystkich CC
+        - **Total P/L** (CC + stock sale)
+        - **ROI%** na LOT-cie
+        """)
+    
+    # CURRENT STATUS PREVIEW
     try:
-        cc_summary = db.get_covered_calls_summary()
+        # Pokaż przykład chains jeśli istnieją
+        conn = db.get_connection()
+        cursor = conn.cursor()
         
-        if cc_summary:
-            st.markdown("### 📋 Current CC Status")
-            
-            for cc in cc_summary:
-                status_icon = "🟢" if cc['status'] == 'open' else "🔴"
-                chain_info = f"Chain: {cc.get('chain_id', 'None')}"
-                st.caption(f"{status_icon} CC #{cc['id']}: {cc['ticker']} {cc['contracts']}x - {chain_info}")
-        else:
-            st.info("📝 Brak CC")
-    
+        cursor.execute("""
+            SELECT ch.chain_name, ch.ticker, ch.status, 
+                   COUNT(cc.id) as cc_count
+            FROM cc_chains ch
+            LEFT JOIN options_cc cc ON cc.chain_id = ch.id  
+            GROUP BY ch.id, ch.chain_name, ch.ticker, ch.status
+            LIMIT 3
+        """)
+        
+        sample_chains = cursor.fetchall()
+        
+        if sample_chains:
+            st.markdown("### 📋 Przykłady chains:")
+            for chain in sample_chains:
+                status_icon = "🟢" if chain[2] == 'active' else "🔴"
+                st.caption(f"{status_icon} {chain[0]} - {chain[3]} CC")
+        
+        conn.close()
+        
     except Exception as e:
-        st.error(f"❌ Błąd ładowania CC: {e}")
+        st.warning(f"⚠️ Błąd ładowania przykładów: {e}")
+
 
 
 # PUNKT 73.1: Test function dla weryfikacji

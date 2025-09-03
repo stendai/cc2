@@ -1318,6 +1318,10 @@ def show_open_cc_tab():
                 st.dataframe(fifo_data, use_container_width=True)
 
 
+# =============================================================================
+# AKTUALIZACJA show_cc_history_tab() dla statusu 'assigned'
+# =============================================================================
+
 def show_cc_history_tab():
     """Historia CC - centrum analityczne strategii opcyjnej"""
     
@@ -1344,6 +1348,8 @@ def show_cc_history_tab():
         total_closed = performance.get('total_closed', 0) or 0
         expired_count = performance.get('expired_count', 0) or 0
         buyback_count = performance.get('buyback_count', 0) or 0
+        # DODANE: assigned_count
+        assigned_count = performance.get('assigned_count', 0) or 0
         
         # Oblicz dodatkowe metryki
         wins = sum(1 for cc in closed_cc_analysis if cc.get('pl_pln', 0) > 0)
@@ -1393,6 +1399,31 @@ def show_cc_history_tab():
                 delta=f"{expired_count} expired"
             )
         
+        # === DODATKOWA SEKCJA: Breakdown po typach zamknięcia ===
+        st.markdown("### 📈 Outcome Breakdown")
+        col_outcome1, col_outcome2, col_outcome3 = st.columns(3)
+        
+        with col_outcome1:
+            st.metric(
+                "✅ Expired",
+                f"{expired_count}",
+                delta=f"{(expired_count/total_closed*100):.1f}%" if total_closed > 0 else None
+            )
+        
+        with col_outcome2:
+            st.metric(
+                "🔴 Bought Back", 
+                f"{buyback_count}",
+                delta=f"{(buyback_count/total_closed*100):.1f}%" if total_closed > 0 else None
+            )
+        
+        with col_outcome3:
+            st.metric(
+                "📞 Assigned",  # NOWE
+                f"{assigned_count}",
+                delta=f"{(assigned_count/total_closed*100):.1f}%" if total_closed > 0 else None
+            )
+        
         # === STRATEGICZNE INSIGHTS ===
         st.markdown("### 🧠 Strategy Insights")
         
@@ -1415,12 +1446,26 @@ def show_cc_history_tab():
         with col_insight2:
             st.markdown("**📈 Strategy Recommendations:**")
             
-            if expire_rate > 70:
-                st.success("✅ Great strike selection - most options expire worthless")
-            elif expire_rate > 50:
-                st.info("📊 Good strike distance - moderate assignments")
+            # ZAKTUALIZOWANA LOGIKA: expire + assigned = "max profit outcomes"
+            max_profit_outcomes = expired_count + assigned_count
+            max_profit_rate = (max_profit_outcomes / total_closed * 100) if total_closed > 0 else 0
+            
+            if max_profit_rate > 70:
+                st.success(f"✅ Great outcomes - {max_profit_rate:.1f}% expired/assigned")
+            elif max_profit_rate > 50:
+                st.info(f"📊 Good outcomes - {max_profit_rate:.1f}% expired/assigned")
             else:
-                st.warning("⚠️ Too many assignments - consider further OTM strikes")
+                st.warning(f"⚠️ Too many buybacks - only {max_profit_rate:.1f}% expired/assigned")
+            
+            # NOWE: Assigned analysis
+            if assigned_count > 0:
+                assigned_rate = (assigned_count / total_closed * 100)
+                if assigned_rate > 30:
+                    st.warning("⚠️ High assignment rate - consider further OTM strikes")
+                elif assigned_rate > 10:
+                    st.info("📊 Moderate assignments - good strike selection")
+                else:
+                    st.success("✅ Low assignments - strikes well positioned")
                 
             # Seasonality hint
             import datetime
@@ -1506,9 +1551,10 @@ def show_cc_history_tab():
             )
         
         with col_f2:
+            # ZAKTUALIZOWANE: Dodano "Assigned"
             outcome_filter = st.selectbox(
                 "Outcome:",
-                ["All", "Profitable Only", "Losses Only", "Expired", "Bought Back"],
+                ["All", "Profitable Only", "Losses Only", "Expired", "Assigned", "Bought Back"],
                 key="outcome_filter"
             )
         
@@ -1537,6 +1583,8 @@ def show_cc_history_tab():
             continue
         elif outcome_filter == "Expired" and status != 'expired':
             continue
+        elif outcome_filter == "Assigned" and status != 'assigned':  # NOWE
+            continue
         elif outcome_filter == "Bought Back" and status != 'bought_back':
             continue
             
@@ -1555,8 +1603,20 @@ def show_cc_history_tab():
     # === DETAILED RESULTS ===
     st.markdown("### 📋 Trade Details")
     
+    # FUNKCJA POMOCNICZA: Status display
+    def get_status_display(status):
+        """Zwróć ładny display dla statusu CC"""
+        status_displays = {
+            'open': '🟢 OPEN',
+            'expired': '✅ EXPIRED',
+            'assigned': '📞 ASSIGNED',  # NOWE
+            'bought_back': '🔴 BOUGHT BACK'
+        }
+        return status_displays.get(status, f'❓ {status.upper()}')
+    
     for cc in filtered_cc[:10]:  # Limit to top 10 for performance
         pl_pln = cc.get('pl_pln', 0)
+        status = cc.get('status', 'unknown')
         
         # Visual indicators
         if pl_pln > 1000:
@@ -1572,7 +1632,8 @@ def show_cc_history_tab():
             pl_color = "🔴"
             pl_label = "BIG LOSS"
         
-        outcome = "EXPIRED" if cc.get('status') == 'expired' else "BOUGHT BACK"
+        # ZAKTUALIZOWANE: Używaj get_status_display
+        outcome = get_status_display(status)
         ticker = cc.get('ticker', 'N/A')
         cc_id = cc.get('cc_id', cc.get('id', 'N/A'))
         
@@ -1614,6 +1675,12 @@ def show_cc_history_tab():
                         st.write(f"Annualized: {annual_yield:+.0f}%")
                 else:
                     st.write("Return: N/A")
+                
+                # NOWE: Dodatkowe info dla assigned
+                if status == 'assigned':
+                    st.info("📞 **ASSIGNED**: Opcja wykonana przez kupującego")
+                    st.write(f"💰 Strike: ${cc.get('strike_usd', 0):.2f}")
+                    st.write("✅ Premia zachowana + akcje sprzedane")
     
     if len(filtered_cc) > 10:
         st.info(f"Showing top 10 results. {len(filtered_cc) - 10} more available.")

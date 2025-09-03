@@ -1,1 +1,1 @@
-findstr /s /i "cc_lot_mappings" *.py
+findstr /s /i "status_options " *.py

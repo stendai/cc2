@@ -447,7 +447,7 @@ def create_options_cc_table(conn):
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (lot_linked_id) REFERENCES lots(id),
                 CONSTRAINT chk_contracts_positive CHECK (contracts > 0),
-                CONSTRAINT chk_status CHECK (status IN ('open', 'expired', 'bought_back'))
+                CONSTRAINT chk_status CHECK (status IN ('open', 'expired', 'bought_back', 'assigned'))
             )
         """)
         

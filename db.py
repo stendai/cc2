@@ -3041,7 +3041,7 @@ def assign_covered_call(cc_id, assignment_date=None):
             
             cur.execute("""
                 UPDATE options_cc 
-                SET status = 'expired',
+                SET status = 'assigned',
                     close_date = ?,
                     fx_close = ?,
                     pl_pln = ?,
@@ -3110,37 +3110,57 @@ def simple_buyback_covered_call(cc_id, buyback_price_usd, buyback_date, broker_f
 
 def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
     """
-    PUNKT 61 NAPRAWKA (zaktualizowana): Poprawne sprawdzanie blokad CC
+    Minimalna, spójna z bazą (LOTS-only) walidacja sprzedaży.
 
-    Nowa logika:
-    1) available_in_lots = SUM(lots.quantity_open) dla danego tickera
-    2) reserved_as_of_today = SUM(rezerwacji z cc_lot_mappings) (fallback: options_cc_reservations)
-       dla CC otwartych as-of dziś: open_date <= today AND (close_date IS NULL OR close_date > today)
-    3) available_to_sell = max(0, available_in_lots - reserved_as_of_today)
-    4) can_sell = available_to_sell >= quantity_to_sell
+    Zasada:
+      available_in_lots = SUM(lots.quantity_open)  (realnie wolne do sprzedaży)
+      total_owned       = SUM(lots.quantity_total)
+      reserved_for_cc   = max(0, total_owned - available_in_lots)   # tylko METRYKA informacyjna
+      available_to_sell = available_in_lots
+      can_sell          = (quantity_to_sell <= available_to_sell)
+
+    UWAGA: całkowicie ignorujemy tabele CC. Jeżeli CC zostały odkupione,
+           a LOT-y pokazują np. 100 wolnych, to sprzedaż 100 przechodzi.
     """
     import sqlite3
-    from datetime import date as _date
+
+    # Normalizacja wejścia
+    t = str(ticker or "").upper().strip()
+    try:
+        qty_req = int(quantity_to_sell)
+    except Exception:
+        qty_req = 0
+
+    if not t:
+        return {
+            'can_sell': False,
+            'message': 'Brak tickera',
+            'available_to_sell': 0,
+            'reserved_for_cc': 0,
+            'total_available': 0,
+            'blocking_cc': []
+        }
 
     conn = None
     try:
         conn = get_connection()
         if not conn:
-            return {'can_sell': False, 'message': 'Brak połączenia z bazą',
-                    'available_to_sell': 0, 'reserved_for_cc': 0,
-                    'total_available': 0, 'blocking_cc': []}
+            return {
+                'can_sell': False,
+                'message': 'Brak połączenia z bazą',
+                'available_to_sell': 0,
+                'reserved_for_cc': 0,
+                'total_available': 0,
+                'blocking_cc': []
+            }
 
-        # Umożliwia dostęp po kluczach
         try:
             conn.row_factory = sqlite3.Row
         except Exception:
             pass
         cur = conn.cursor()
 
-        t = str(ticker).upper().strip()
-        today = _date.today().isoformat()
-
-        # 1) SUMA otwartych akcji w LOT-ach (nie korygujemy o CC w samej tabeli lots)
+        # SUMA wolnych (to jest prawdziwy limit sprzedaży)
         cur.execute("""
             SELECT COALESCE(SUM(quantity_open), 0) AS available_in_lots
             FROM lots
@@ -3149,110 +3169,28 @@ def check_cc_restrictions_before_sell(ticker, quantity_to_sell):
         row = cur.fetchone()
         available_in_lots = int(row["available_in_lots"] if row and row["available_in_lots"] is not None else 0)
 
-        # 2) Ile jest zarezerwowane pod otwarte CC (as-of dziś)
-        #    Priorytet: cc_lot_mappings
+        # SUMA posiadanych (do metryk)
         cur.execute("""
-            SELECT COALESCE(SUM(m.shares_reserved), 0) AS reserved
-            FROM cc_lot_mappings m
-            JOIN options_cc cc ON cc.id = m.cc_id
-            WHERE UPPER(cc.ticker) = ?
-              AND cc.open_date <= ?
-              AND (cc.close_date IS NULL OR cc.close_date > ?)
-              AND cc.status = 'open'
-        """, (t, today, today))
+            SELECT COALESCE(SUM(quantity_total), 0) AS total_owned
+            FROM lots
+            WHERE UPPER(ticker) = ?
+        """, (t,))
         row = cur.fetchone()
-        reserved_from_mappings = int(row["reserved"] if row and row["reserved"] is not None else 0)
+        total_owned = int(row["total_owned"] if row and row["total_owned"] is not None else 0)
 
-        reserved_for_cc = reserved_from_mappings
-        if reserved_for_cc == 0:
-            # Fallback: options_cc_reservations (kompatybilność wstecz)
-            cur.execute("""
-                SELECT COALESCE(SUM(r.qty_reserved), 0) AS reserved
-                FROM options_cc_reservations r
-                JOIN options_cc cc ON cc.id = r.cc_id
-                WHERE UPPER(cc.ticker) = ?
-                  AND cc.open_date <= ?
-                  AND (cc.close_date IS NULL OR cc.close_date > ?)
-                  AND cc.status = 'open'
-            """, (t, today, today))
-            row = cur.fetchone()
-            reserved_for_cc = int(row["reserved"] if row and row["reserved"] is not None else 0)
+        # Metryka "zarezerwowane" tylko jako różnica — nie wpływa na decyzję
+        reserved_for_cc = max(0, total_owned - available_in_lots)
 
-        # 3) Dostępne do sprzedaży po uwzględnieniu rezerwacji
-        available_to_sell = available_in_lots - reserved_for_cc
-        if available_to_sell < 0:
-            available_to_sell = 0
-
-        can_sell = available_to_sell >= int(quantity_to_sell)
-
-        # 4) Jeśli nie można sprzedać — raport blokujących CC z realnymi rezerwacjami per CC
-        blocking_cc = []
-        total_shares_owned = 0
-        if not can_sell:
-            # total posiadanych (dla kontekstu)
-            cur.execute("""
-                SELECT COALESCE(SUM(quantity_total), 0) AS total_owned
-                FROM lots
-                WHERE UPPER(ticker) = ?
-            """, (t,))
-            row = cur.fetchone()
-            total_shares_owned = int(row["total_owned"] if row and row["total_owned"] is not None else 0)
-
-            # Rozbicie rezerwacji per CC (priorytet mappings, fallback reservations)
-            cur.execute("""
-                SELECT cc.id AS cc_id,
-                       cc.contracts,
-                       cc.strike_usd,
-                       cc.expiry_date,
-                       cc.open_date,
-                       COALESCE(SUM(m.shares_reserved), 0) AS shares_reserved
-                FROM options_cc cc
-                LEFT JOIN cc_lot_mappings m ON m.cc_id = cc.id
-                WHERE UPPER(cc.ticker) = ?
-                  AND cc.open_date <= ?
-                  AND (cc.close_date IS NULL OR cc.close_date > ?)
-                  AND cc.status = 'open'
-                GROUP BY cc.id, cc.contracts, cc.strike_usd, cc.expiry_date, cc.open_date
-                ORDER BY cc.open_date
-            """, (t, today, today))
-            rows = cur.fetchall() or []
-
-            # Jeżeli mappings są puste (wszystkie 0), spróbuj na bazie options_cc_reservations
-            if not rows or all(int(r["shares_reserved"] or 0) == 0 for r in rows):
-                cur.execute("""
-                    SELECT cc.id AS cc_id,
-                           cc.contracts,
-                           cc.strike_usd,
-                           cc.expiry_date,
-                           cc.open_date,
-                           COALESCE(SUM(r.qty_reserved), 0) AS shares_reserved
-                    FROM options_cc cc
-                    LEFT JOIN options_cc_reservations r ON r.cc_id = cc.id
-                    WHERE UPPER(cc.ticker) = ?
-                      AND cc.open_date <= ?
-                      AND (cc.close_date IS NULL OR cc.close_date > ?)
-                      AND cc.status = 'open'
-                    GROUP BY cc.id, cc.contracts, cc.strike_usd, cc.expiry_date, cc.open_date
-                    ORDER BY cc.open_date
-                """, (t, today, today))
-                rows = cur.fetchall() or []
-
-            blocking_cc = [{
-                'cc_id': int(r['cc_id']),
-                'contracts': int(r['contracts'] or 0),
-                'shares_reserved': int(r['shares_reserved'] or 0),
-                'strike_usd': float(r['strike_usd'] or 0),
-                'expiry_date': r['expiry_date'],
-                'open_date': r['open_date']
-            } for r in rows]
+        available_to_sell = max(0, available_in_lots)
+        can_sell = (qty_req <= available_to_sell)
 
         return {
             'can_sell': can_sell,
-            'available_to_sell': available_to_sell,
-            'reserved_for_cc': reserved_for_cc,
-            'total_available': total_shares_owned,  # wszystkie posiadane (quantity_total)
-            'blocking_cc': blocking_cc,
-            'message': 'OK' if can_sell else f'Zarezerwowane pod {len(blocking_cc)} CC'
+            'available_to_sell': available_to_sell,  # = SUM(lots.quantity_open)
+            'reserved_for_cc': reserved_for_cc,      # METRYKA (total_owned - available_in_lots)
+            'total_available': total_owned,          # = SUM(lots.quantity_total)
+            'blocking_cc': [],                       # ignorujemy CC – brak listy blokujących
+            'message': 'OK' if can_sell else 'Brak wystarczającej liczby wolnych akcji w LOT-ach'
         }
 
     except Exception as e:
@@ -4907,7 +4845,7 @@ def get_closed_cc_analysis():
                    premium_buyback_usd, premium_buyback_pln, open_date, close_date, expiry_date,
                    status, fx_open, fx_close, pl_pln, created_at
             FROM options_cc
-            WHERE status IN ('bought_back', 'expired')
+            WHERE status IN ('bought_back', 'expired', 'assigned')
             ORDER BY close_date DESC, ticker, id DESC
         """)
         rows = cur.fetchall() or []
@@ -5009,10 +4947,13 @@ def get_closed_cc_analysis():
             if recorded_pl_pln is None or recorded_pl_pln == 0.0:
                 if status == "expired":
                     pl_pln = premium_sell_pln
+                elif status == "assigned":
+                    pl_pln = premium_sell_pln
                 else:  # bought_back
                     pl_pln = premium_sell_pln - premium_buyback_pln
             else:
                 pl_pln = recorded_pl_pln
+
 
             # Net premium (info pomocnicze; w USD/PLN)
             if status == "expired":
@@ -5020,7 +4961,12 @@ def get_closed_cc_analysis():
                 net_premium_pln = premium_sell_pln
                 outcome_emoji = "🏆"
                 outcome_text = "Expired (Max Profit)"
-            else:
+            elif status == "assigned":  # ← DODAJ TĘ SEKCJĘ (TEGO BRAKOWAŁO!)
+                net_premium_usd = premium_sell_usd
+                net_premium_pln = premium_sell_pln
+                outcome_emoji = "📞"
+                outcome_text = "Assigned (Max Profit)"
+            else:  # bought_back
                 net_premium_usd = premium_sell_usd - premium_buyback_usd
                 net_premium_pln = premium_sell_pln - premium_buyback_pln
                 outcome_emoji = "🔄"
@@ -5079,6 +5025,7 @@ def get_cc_performance_summary():
     PUNKT 67: Podsumowanie performance wszystkich CC (z wyliczanym P/L dla braków).
     - P/L używany do statystyk: IF pl_pln IS NULL THEN
         CASE status WHEN 'expired' THEN premium_sell_pln
+                    WHEN 'assigned' THEN premium_sell_pln
                     WHEN 'bought_back' THEN premium_sell_pln - COALESCE(premium_buyback_pln,0)
         END
       ELSE pl_pln END
@@ -5100,89 +5047,79 @@ def get_cc_performance_summary():
         # --- GLOBAL STATS (zamknięte CC) ---
         cur.execute("""
             SELECT
-                COUNT(*)                                                   AS total_closed,
-                SUM(CASE WHEN status='expired'     THEN 1 ELSE 0 END)      AS expired_count,
-                SUM(CASE WHEN status='bought_back' THEN 1 ELSE 0 END)      AS buyback_count,
+                COUNT(*) AS total_closed,
+                SUM(CASE WHEN status='expired' THEN 1 ELSE 0 END) AS expired_count,
+                SUM(CASE WHEN status='assigned' THEN 1 ELSE 0 END) AS assigned_count,
+                SUM(CASE WHEN status='bought_back' THEN 1 ELSE 0 END) AS buyback_count,
                 SUM(
                     CASE
-                        WHEN pl_pln IS NULL THEN
-                            CASE status
-                                WHEN 'expired'     THEN COALESCE(premium_sell_pln,0)
-                                WHEN 'bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
-                                ELSE 0
-                            END
-                        ELSE pl_pln
+                        WHEN pl_pln IS NOT NULL THEN pl_pln
+                        WHEN status='expired' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='assigned' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
+                        ELSE 0
                     END
-                )                                                          AS total_realized_pl,
+                ) AS total_realized_pl,
                 AVG(
                     CASE
-                        WHEN pl_pln IS NULL THEN
-                            CASE status
-                                WHEN 'expired'     THEN COALESCE(premium_sell_pln,0)
-                                WHEN 'bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
-                                ELSE 0
-                            END
-                        ELSE pl_pln
+                        WHEN pl_pln IS NOT NULL THEN pl_pln
+                        WHEN status='expired' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='assigned' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
+                        ELSE 0
                     END
-                )                                                          AS avg_pl_per_cc,
+                ) AS avg_pl_per_cc,
                 MIN(
                     CASE
-                        WHEN pl_pln IS NULL THEN
-                            CASE status
-                                WHEN 'expired'     THEN COALESCE(premium_sell_pln,0)
-                                WHEN 'bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
-                                ELSE 0
-                            END
-                        ELSE pl_pln
+                        WHEN pl_pln IS NOT NULL THEN pl_pln
+                        WHEN status='expired' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='assigned' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
+                        ELSE 0
                     END
-                )                                                          AS worst_pl,
+                ) AS worst_pl,
                 MAX(
                     CASE
-                        WHEN pl_pln IS NULL THEN
-                            CASE status
-                                WHEN 'expired'     THEN COALESCE(premium_sell_pln,0)
-                                WHEN 'bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
-                                ELSE 0
-                            END
-                        ELSE pl_pln
+                        WHEN pl_pln IS NOT NULL THEN pl_pln
+                        WHEN status='expired' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='assigned' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
+                        ELSE 0
                     END
-                )                                                          AS best_pl
+                ) AS best_pl
             FROM options_cc
-            WHERE status IN ('bought_back','expired')
+            WHERE status IN ('bought_back','expired','assigned')
         """)
         g = cur.fetchone()
 
         # --- PER TICKER STATS ---
         cur.execute("""
             SELECT
-                UPPER(ticker)                                              AS ticker,
-                COUNT(*)                                                   AS cc_count,
+                UPPER(ticker) AS ticker,
+                COUNT(*) AS cc_count,
                 SUM(
                     CASE
-                        WHEN pl_pln IS NULL THEN
-                            CASE status
-                                WHEN 'expired'     THEN COALESCE(premium_sell_pln,0)
-                                WHEN 'bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
-                                ELSE 0
-                            END
-                        ELSE pl_pln
+                        WHEN pl_pln IS NOT NULL THEN pl_pln
+                        WHEN status='expired' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='assigned' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
+                        ELSE 0
                     END
-                )                                                          AS total_pl,
+                ) AS total_pl,
                 AVG(
                     CASE
-                        WHEN pl_pln IS NULL THEN
-                            CASE status
-                                WHEN 'expired'     THEN COALESCE(premium_sell_pln,0)
-                                WHEN 'bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
-                                ELSE 0
-                            END
-                        ELSE pl_pln
+                        WHEN pl_pln IS NOT NULL THEN pl_pln
+                        WHEN status='expired' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='assigned' THEN COALESCE(premium_sell_pln,0)
+                        WHEN status='bought_back' THEN COALESCE(premium_sell_pln,0) - COALESCE(premium_buyback_pln,0)
+                        ELSE 0
                     END
-                )                                                          AS avg_pl,
-                SUM(CASE WHEN status='expired'     THEN 1 ELSE 0 END)      AS expired_count,
-                SUM(CASE WHEN status='bought_back' THEN 1 ELSE 0 END)      AS buyback_count
+                ) AS avg_pl,
+                SUM(CASE WHEN status='expired' THEN 1 ELSE 0 END) AS expired_count,
+                SUM(CASE WHEN status='assigned' THEN 1 ELSE 0 END) AS assigned_count,
+                SUM(CASE WHEN status='bought_back' THEN 1 ELSE 0 END) AS buyback_count
             FROM options_cc
-            WHERE status IN ('bought_back','expired')
+            WHERE status IN ('bought_back','expired','assigned')
             GROUP BY UPPER(ticker)
             ORDER BY total_pl DESC, ticker ASC
         """)
@@ -5218,6 +5155,7 @@ def get_cc_performance_summary():
         summary = {
             'total_closed': int(g['total_closed'] or 0),
             'expired_count': int(g['expired_count'] or 0),
+            'assigned_count': int(g['assigned_count'] or 0),
             'buyback_count': int(g['buyback_count'] or 0),
             'total_realized_pl': float(g['total_realized_pl'] or 0.0),
             'avg_pl_per_cc': float(g['avg_pl_per_cc'] or 0.0),
@@ -7340,227 +7278,195 @@ def run_cc_chains_migration():
         except Exception:
             pass
 
+# =============================================================================
+# PUNKT 74: LOT LIFECYCLE CHAINS - Historia życia LOT-a akcji
+# =============================================================================
 
-def auto_detect_cc_chains():
+def auto_detect_lot_chains():
     """
-    🤖 PUNKT 74: Automatyczne tworzenie/przypisywanie CC Chains
-    Zasady:
-      - grupowanie po LOT (1 CC -> 1 LOT); CC rozbite na wiele LOT-ów jest pomijane (raportowane),
-      - źródło prawdy: cc_lot_mappings; fallback: options_cc_reservations,
-      - bez dotykania lots.quantity_open,
-      - idempotentne uzupełnienie cc_chains o kolumny: lot_id, ticker, chain_name, start_date, status.
-    Zwraca dict z licznikami i diagnostyką.
+    🔗 PUNKT 74: Auto-detection LOT Chains - LIFECYCLE LOT-ów
+    
+    CHAIN = Kompletny lifecycle LOT-a:
+    1. Zakup LOT-a (lots.buy_date) 
+    2. Wszystkie CC wystawione na ten LOT (lot_linked_id)
+    3. Sprzedaż LOT-a (stock_trades) - KOŃCZY CHAIN
+    
+    METRYKI PER CHAIN:
+    - Total Premium PLN (suma wszystkich CC)
+    - Total P/L PLN (CC + sprzedaż akcji)
+    - Duration (dni od buy do sell/teraz)
+    - ROI% na LOT
     """
     import sqlite3
-
+    from datetime import date
+    
     conn = None
     try:
         conn = get_connection()
         if not conn:
             return {'success': False, 'message': 'Brak połączenia z bazą'}
 
-        # Ułatwione nazwy kolumn (gdy możliwe)
         try:
             conn.row_factory = sqlite3.Row
         except Exception:
             pass
         cur = conn.cursor()
 
-        # --- 0) Przygotuj cc_chains: dołóż kolumny jeśli brakuje (idempotentnie)
-        cur.execute("""SELECT name FROM sqlite_master WHERE type='table' AND name='cc_chains'""")
-        has_chains = cur.fetchone() is not None
-        if not has_chains:
-            # Pełny schemat (jeśli tablica nie istnieje)
+        # 1. SPRAWDŹ czy tabela cc_chains istnieje
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cc_chains'")
+        if not cur.fetchone():
+            return {
+                'success': False,
+                'message': '❌ Tabela cc_chains nie istnieje! Uruchom migrację.'
+            }
+
+        # 2. ZNAJDŹ WSZYSTKIE LOT-y (aktywne + historyczne)
+        cur.execute("""
+            SELECT 
+                l.id as lot_id,
+                l.ticker,
+                l.quantity_total,
+                l.quantity_open,
+                l.buy_date,
+                l.buy_price_usd,
+                l.cost_pln,
+                CASE 
+                    WHEN l.quantity_open = 0 THEN 'sold'
+                    WHEN l.quantity_open > 0 THEN 'active'
+                    ELSE 'unknown'
+                END as lot_status
+            FROM lots l
+            ORDER BY l.ticker, l.buy_date
+        """)
+        
+        all_lots = cur.fetchall()
+        
+        if not all_lots:
+            return {
+                'success': True,
+                'message': '✅ Brak LOT-ów do analizy'
+            }
+
+        # 3. DLA KAŻDEGO LOT-a - sprawdź czy ma CC i czy potrzebuje chain
+        lots_needing_chains = []
+        
+        for lot in all_lots:
+            lot_id = lot['lot_id']
+            
+            # Sprawdź czy LOT już ma chain
             cur.execute("""
-                CREATE TABLE cc_chains (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    lot_id INTEGER,
-                    ticker TEXT,
-                    chain_name TEXT,
-                    start_date DATE,
-                    status TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-        else:
-            # Dołóż brakujące kolumny
-            cur.execute("PRAGMA table_info(cc_chains)")
-            cols = [r['name'] if isinstance(r, sqlite3.Row) else r[1] for r in (cur.fetchall() or [])]
-            required = ['lot_id', 'ticker', 'chain_name', 'start_date', 'status']
-            for col in required:
-                if col not in cols:
-                    cur.execute(f"ALTER TABLE cc_chains ADD COLUMN {col} {('INTEGER' if col=='lot_id' else ('DATE' if col=='start_date' else 'TEXT'))}")
+                SELECT COUNT(*) 
+                FROM cc_chains 
+                WHERE lot_id = ?
+            """, (lot_id,))
+            
+            existing_chains = cur.fetchone()[0]
+            if existing_chains > 0:
+                continue  # LOT już ma chain
+            
+            # Sprawdź czy LOT ma CC (aktualnie lub historycznie)
+            cur.execute("""
+                SELECT COUNT(*) 
+                FROM options_cc 
+                WHERE lot_linked_id = ?
+            """, (lot_id,))
+            
+            cc_count = cur.fetchone()[0]
+            
+            # WARUNEK: LOT potrzebuje chain jeśli ma jakiekolwiek CC
+            if cc_count > 0:
+                lots_needing_chains.append({
+                    'lot': dict(lot),
+                    'cc_count': cc_count
+                })
 
-        # Indeks po lot_id (przyspiesza lookup)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_cc_chains_lot ON cc_chains(lot_id)")
-
-        # --- 1) Ile CC bez chains?
-        cur.execute("SELECT COUNT(*) AS c FROM options_cc WHERE chain_id IS NULL")
-        cc_without_chains = int((cur.fetchone() or {'c': 0})['c'] or 0)
-
-        # Dla debug: ile mapowań w nowej tabeli
-        cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cc_lot_mappings'")
-        has_new_maps = cur.fetchone() is not None
-        total_mappings = 0
-        if has_new_maps:
-            cur.execute("SELECT COUNT(*) AS c FROM cc_lot_mappings")
-            total_mappings = int((cur.fetchone() or {'c': 0})['c'] or 0)
-
-        if cc_without_chains == 0:
+        if not lots_needing_chains:
             return {
                 'success': True,
                 'chains_created': 0,
-                'cc_assigned': 0,
-                'skipped_multi_lot': [],
-                'used_source': 'cc_lot_mappings' if has_new_maps else 'none',
-                'message': f'✅ Wszystkie CC mają chain_id (mapowań: {total_mappings})'
+                'message': '✅ Wszystkie LOT-y z CC już mają chains'
             }
 
-        # --- 2) Zbierz kandydata per CC -> LOT (tylko te CC, które mają dokładnie 1 LOT)
-        cc_to_lot = {}           # cc_id -> lot_id (jednoznacznie)
-        ambiguous_cc = []        # cc_id z >1 LOT
-        used_source = None
-
-        def _collect_from_mappings(table_name, qty_col_name):
-            # zwraca (cc_to_lot, ambiguous_cc)
-            _cc_to_lot = {}
-            _ambiguous = set()
-
-            # policz DISTINCT lotów na cc_id
-            cur.execute(f"""
-                SELECT cc.id AS cc_id, COUNT(DISTINCT m.lot_id) AS lot_cnt
-                FROM options_cc cc
-                JOIN {table_name} m ON m.cc_id = cc.id
-                WHERE cc.chain_id IS NULL
-                GROUP BY cc.id
-            """)
-            rows = cur.fetchall() or []
-            one_lot_cc = set(int(r['cc_id']) for r in rows if int(r['lot_cnt'] or 0) == 1)
-            many_lot_cc = set(int(r['cc_id']) for r in rows if int(r['lot_cnt'] or 0) > 1)
-
-            if one_lot_cc:
-                cur.execute(f"""
-                    SELECT m.cc_id, m.lot_id
-                    FROM {table_name} m
-                    WHERE m.cc_id IN ({",".join("?"*len(one_lot_cc))})
-                    GROUP BY m.cc_id
-                """, tuple(one_lot_cc))
-                for r in (cur.fetchall() or []):
-                    _cc_to_lot[int(r['cc_id'])] = int(r['lot_id'])
-
-            _ambiguous.update(many_lot_cc)
-            return _cc_to_lot, sorted(_ambiguous)
-
-        # priorytet: cc_lot_mappings
-        if has_new_maps:
-            used_source = 'cc_lot_mappings'
-            cc_to_lot, ambiguous_cc = _collect_from_mappings('cc_lot_mappings', 'shares_reserved')
-
-        # fallback: options_cc_reservations
-        if not cc_to_lot:
-            cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='options_cc_reservations'")
-            has_old_maps = cur.fetchone() is not None
-            if has_old_maps:
-                used_source = 'options_cc_reservations'
-                cc_to_lot, ambiguous_cc = _collect_from_mappings('options_cc_reservations', 'qty_reserved')
-
-        # jeśli dalej nic nie znaleziono
-        if not cc_to_lot:
-            return {
-                'success': True,
-                'chains_created': 0,
-                'cc_assigned': 0,
-                'skipped_multi_lot': ambiguous_cc,
-                'used_source': used_source or 'none',
-                'message': f"🔍 {cc_without_chains} CC bez chain_id, ale brak jednoznacznych mapowań (sprawdź mapowania)."
-            }
-
-        # --- 3) Zbuduj listę LOT-ów i utwórz/pobierz chain dla każdego
-        lot_ids = sorted(set(cc_to_lot.values()))
-        lot_chain = {}   # lot_id -> chain_id
+        # 4. TWÓRZ CHAINS dla LOT-ów z CC
         chains_created = 0
-
-        for lot_id in lot_ids:
-            # pobierz ticker/buy_date dla nazwy łańcucha
-            cur.execute("SELECT ticker, buy_date FROM lots WHERE id = ?", (lot_id,))
-            row = cur.fetchone()
-            if not row:
-                # brak takiego lota – nie blokujemy całej operacji
-                continue
-            ticker = row['ticker']
-            buy_date = row['buy_date']
-
-            # Czy łańcuch już istnieje dla tego LOT-a?
-            cur.execute("SELECT id FROM cc_chains WHERE lot_id = ? LIMIT 1", (lot_id,))
-            r = cur.fetchone()
-            if r:
-                chain_id = int(r['id'])
-                lot_chain[lot_id] = chain_id
-                continue
-
-            # wyznacz start_date = najwcześniejszy open_date CC korzystających z tego LOT-a
-            cc_ids_for_lot = [cc for cc, l in cc_to_lot.items() if l == lot_id]
-            if cc_ids_for_lot:
-                cur.execute(f"""
-                    SELECT MIN(open_date) AS start_date
-                    FROM options_cc
-                    WHERE id IN ({",".join("?"*len(cc_ids_for_lot))})
-                """, tuple(cc_ids_for_lot))
-                r2 = cur.fetchone()
-                start_date = r2['start_date'] if r2 and r2['start_date'] else buy_date
-            else:
-                start_date = buy_date
-
-            chain_name = f"{ticker} Chain (LOT #{lot_id})"
-
-            cur.execute("""
-                INSERT INTO cc_chains (lot_id, ticker, chain_name, start_date, status)
-                VALUES (?, ?, ?, ?, 'active')
-            """, (lot_id, ticker, chain_name, start_date))
-            chain_id = cur.lastrowid
-            lot_chain[lot_id] = chain_id
-            chains_created += 1
-
-        # --- 4) Przypisz chain_id do CC (tylko jednoznaczne, bez wielo-lotowych)
         cc_assigned = 0
-        skipped_multi = []
-
+        
         try:
-            cur.execute("BEGIN")
-            # CC z >1 lot – pomijamy i raportujemy
-            skipped_multi.extend(ambiguous_cc)
-
-            # Jednoznaczne: przypisz
-            for cc_id, lot_id in cc_to_lot.items():
-                if cc_id in ambiguous_cc:
-                    continue
-                chain_id = lot_chain.get(lot_id)
-                if not chain_id:
-                    continue
-                cur.execute("UPDATE options_cc SET chain_id = ? WHERE id = ? AND chain_id IS NULL", (chain_id, cc_id))
-                if cur.rowcount:
-                    cc_assigned += 1
+            cur.execute("BEGIN TRANSACTION")
+            
+            for lot_data in lots_needing_chains:
+                lot = lot_data['lot']
+                lot_id = lot['lot_id']
+                ticker = lot['ticker']
+                buy_date = lot['buy_date']
+                lot_status = lot['lot_status']
+                
+                # Chain name: TICKER_LOT{id}
+                chain_name = f"{ticker}_LOT{lot_id}"
+                
+                # End date dla sprzedanych LOT-ów
+                end_date = None
+                chain_status = 'active'
+                
+                if lot_status == 'sold':
+                    # Znajdź datę sprzedaży LOT-a
+                    cur.execute("""
+                        SELECT MAX(st.sell_date) as last_sell_date
+                        FROM stock_trades st
+                        JOIN stock_trade_splits sts ON st.id = sts.trade_id
+                        WHERE sts.lot_id = ?
+                    """, (lot_id,))
+                    
+                    sell_result = cur.fetchone()
+                    if sell_result and sell_result['last_sell_date']:
+                        end_date = sell_result['last_sell_date']
+                        chain_status = 'closed'
+                
+                # Utwórz chain
+                cur.execute("""
+                    INSERT INTO cc_chains (lot_id, ticker, chain_name, start_date, end_date, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (lot_id, ticker, chain_name, buy_date, end_date, chain_status))
+                
+                chain_id = cur.lastrowid
+                chains_created += 1
+                
+                # Przypisz wszystkie CC tego LOT-a do chain
+                cur.execute("""
+                    UPDATE options_cc 
+                    SET chain_id = ?
+                    WHERE lot_linked_id = ? AND chain_id IS NULL
+                """, (chain_id, lot_id))
+                
+                cc_assigned += cur.rowcount
+            
             cur.execute("COMMIT")
+            
         except Exception as txe:
-            try: cur.execute("ROLLBACK")
-            except Exception: pass
-            return {'success': False, 'message': f'Błąd transakcji przypisywania: {txe}'}
+            try:
+                cur.execute("ROLLBACK")
+            except:
+                pass
+            raise txe
 
         return {
             'success': True,
             'chains_created': chains_created,
             'cc_assigned': cc_assigned,
-            'skipped_multi_lot': sorted(set(skipped_multi)),
-            'used_source': used_source or 'none',
-            'message': f'✅ Utworzono {chains_created} chains, przypisano {cc_assigned} CC'
+            'lots_processed': len(lots_needing_chains),
+            'message': f'✅ Utworzono {chains_created} LOT chains, przypisano {cc_assigned} CC',
+            'details': {
+                'method': 'lot_lifecycle',
+                'active_chains': sum(1 for l in lots_needing_chains if l['lot']['lot_status'] == 'active'),
+                'closed_chains': sum(1 for l in lots_needing_chains if l['lot']['lot_status'] == 'sold')
+            }
         }
 
     except Exception as e:
-        import traceback
         return {
             'success': False,
-            'message': f'❌ Błąd auto-detection: {e}',
-            'error_details': traceback.format_exc()
+            'message': f'❌ Błąd LOT chains detection: {str(e)}',
+            'error_details': str(e)
         }
     finally:
         try:
@@ -7569,105 +7475,308 @@ def auto_detect_cc_chains():
         except Exception:
             pass
 
+# =============================================================================
+# PUNKT 74.1: LOT CHAIN ANALYTICS - metryki per chain
+# =============================================================================
 
-def get_cc_chains_summary():
+def get_lot_chain_summary(chain_id=None):
     """
-    📊 PUNKT 74.1: Pobranie podsumowania wszystkich CC Chains
+    📊 Podsumowanie LOT Chain z metrykami finansowymi
+    
+    Returns:
+        {
+            'lot_info': {...},
+            'cc_summary': {...}, 
+            'financial_summary': {...},
+            'timeline': [...]
+        }
+    """
+    conn = get_connection()
+    if not conn:
+        return {}
+    
+    try:
+        cur = conn.cursor()
+        conn.row_factory = sqlite3.Row
+        
+        # Pobierz dane chain
+        cur.execute("""
+            SELECT 
+                ch.id, ch.lot_id, ch.ticker, ch.chain_name,
+                ch.start_date, ch.end_date, ch.status,
+                l.quantity_total, l.quantity_open, l.buy_price_usd, l.cost_pln,
+                l.buy_date, l.fx_rate as lot_fx_rate
+            FROM cc_chains ch
+            JOIN lots l ON l.id = ch.lot_id
+            WHERE ch.id = ?
+        """, (chain_id,))
+        
+        chain = cur.fetchone()
+        if not chain:
+            return {'error': 'Chain not found'}
+        
+        chain_dict = dict(chain)
+        
+        # CC w tym chain
+        cur.execute("""
+            SELECT 
+                id, status, open_date, close_date, contracts,
+                premium_sell_pln, premium_buyback_pln, pl_pln,
+                strike_usd, expiry_date
+            FROM options_cc
+            WHERE chain_id = ?
+            ORDER BY open_date
+        """, (chain_id,))
+        
+        cc_list = [dict(cc) for cc in cur.fetchall()]
+        
+        # Sprzedaże z tego LOT-a
+        lot_id = chain['lot_id']
+        cur.execute("""
+            SELECT 
+                st.sell_date, st.sell_price_usd, st.fx_rate,
+                sts.qty_from_lot, sts.realized_pl_pln
+            FROM stock_trades st
+            JOIN stock_trade_splits sts ON st.id = sts.trade_id
+            WHERE sts.lot_id = ?
+            ORDER BY st.sell_date
+        """, (lot_id,))
+        
+        stock_sales = [dict(sale) for sale in cur.fetchall()]
+        
+        # FINANSOWE PODSUMOWANIE
+        total_cc_premium = sum(cc.get('premium_sell_pln', 0) or 0 for cc in cc_list)
+        total_cc_pl = sum(cc.get('pl_pln', 0) or 0 for cc in cc_list)
+        total_stock_pl = sum(sale.get('realized_pl_pln', 0) or 0 for sale in stock_sales)
+        
+        lot_cost_pln = chain['cost_pln'] or 0
+        total_chain_pl = total_cc_pl + total_stock_pl
+        
+        roi_percent = (total_chain_pl / lot_cost_pln * 100) if lot_cost_pln > 0 else 0
+        
+        # Timeline events
+        timeline = []
+        
+        # Zakup LOT-a
+        timeline.append({
+            'date': chain['buy_date'],
+            'event': 'LOT_BUY',
+            'description': f"Zakup {chain['quantity_total']} {chain['ticker']} @ ${chain['buy_price_usd']:.2f}",
+            'amount_pln': -lot_cost_pln
+        })
+        
+        # CC events
+        for cc in cc_list:
+            timeline.append({
+                'date': cc['open_date'],
+                'event': 'CC_OPEN',
+                'description': f"CC {cc['contracts']}x strike ${cc['strike_usd']:.2f}",
+                'amount_pln': cc.get('premium_sell_pln', 0)
+            })
+            
+            if cc['close_date']:
+                timeline.append({
+                    'date': cc['close_date'],
+                    'event': f"CC_{cc['status'].upper()}",
+                    'description': f"CC {cc['status']} - P/L: {cc.get('pl_pln', 0):.0f} PLN",
+                    'amount_pln': cc.get('pl_pln', 0) - cc.get('premium_sell_pln', 0)  # Net change
+                })
+        
+        # Stock sales
+        for sale in stock_sales:
+            timeline.append({
+                'date': sale['sell_date'],
+                'event': 'STOCK_SELL',
+                'description': f"Sprzedaż {sale['qty_from_lot']} @ ${sale['sell_price_usd']:.2f}",
+                'amount_pln': sale.get('realized_pl_pln', 0)
+            })
+        
+        # Sortuj timeline
+        timeline.sort(key=lambda x: x['date'] or '9999-12-31')
+        
+        return {
+            'chain_info': chain_dict,
+            'cc_summary': {
+                'cc_count': len(cc_list),
+                'total_premium_pln': total_cc_premium,
+                'total_cc_pl_pln': total_cc_pl,
+                'cc_list': cc_list
+            },
+            'stock_summary': {
+                'sales_count': len(stock_sales),
+                'total_stock_pl_pln': total_stock_pl,
+                'stock_sales': stock_sales
+            },
+            'financial_summary': {
+                'lot_cost_pln': lot_cost_pln,
+                'total_chain_pl_pln': total_chain_pl,
+                'roi_percent': roi_percent,
+                'is_active': chain['status'] == 'active'
+            },
+            'timeline': timeline
+        }
+        
+    except Exception as e:
+        return {'error': str(e)}
+    finally:
+        conn.close()
 
-    Zwraca listę słowników:
-      id, lot_id, ticker, chain_name, start_date, end_date, status,
-      lot_buy_date, lot_total, lot_open, cc_count, open_cc_count,
-      total_pl_pln, total_premium_pln
+# =============================================================================
+# ZAMIEŃ auto_detect_cc_chains() na auto_detect_lot_chains() w db.py!
+# =============================================================================
+
+
+def get_lot_chains_summary():
+    """
+    📊 PUNKT 81: Podsumowanie wszystkich LOT chains - NAPRAWIONE
+    
+    POPRAWKA: Użycie rzeczywistych kolumn z stock_trade_splits
+    - Brak realized_pl_pln - obliczamy z głównej tabeli stock_trades
     """
     import sqlite3
-
-    conn = None
+    
+    conn = get_connection()
+    if not conn:
+        return []
+    
     try:
-        conn = get_connection()
-        if not conn:
-            return []
-
-        try:
-            conn.row_factory = sqlite3.Row
-        except Exception:
-            pass
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-
-        # Czy istnieje tabela cc_chains?
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cc_chains'")
-        if cur.fetchone() is None:
-            return []
-
-        # Sprawdź kolumny w cc_chains (end_date może nie istnieć)
-        cur.execute("PRAGMA table_info(cc_chains)")
-        cc_cols = { (r['name'] if isinstance(r, sqlite3.Row) else r[1]) for r in (cur.fetchall() or []) }
-        has_end_date = 'end_date' in cc_cols
-
-        end_date_sql = "ch.end_date" if has_end_date else "NULL AS end_date"
-
-        # Raport: LEFT JOIN na lots (żeby nie tracić chainów bez lota)
-        query = f"""
+        
+        # Pobierz wszystkie chains z info o LOT-ach
+        cur.execute("""
             SELECT 
-                ch.id                         AS id,
-                ch.lot_id                     AS lot_id,
-                COALESCE(ch.ticker, l.ticker) AS ticker,
-                ch.chain_name                 AS chain_name,
-                ch.start_date                 AS start_date,
-                {end_date_sql}                ,
-                ch.status                     AS status,
-                l.buy_date                    AS lot_buy_date,
-                l.quantity_total              AS lot_total,
-                l.quantity_open               AS lot_open,
-                COUNT(cc.id)                  AS cc_count,
-                SUM(CASE WHEN cc.status = 'open' THEN 1 ELSE 0 END)                    AS open_cc_count,
-                COALESCE(SUM(CASE WHEN cc.pl_pln IS NOT NULL THEN cc.pl_pln END), 0)   AS total_pl_pln,
-                COALESCE(SUM(cc.premium_sell_pln), 0)                                   AS total_premium_pln
+                ch.id as chain_id,
+                ch.lot_id,
+                ch.ticker,
+                ch.chain_name,
+                ch.start_date as chain_start_date,
+                ch.end_date as chain_end_date,
+                ch.status as chain_status,
+                l.quantity_total,
+                l.quantity_open, 
+                l.buy_date as lot_buy_date,
+                l.buy_price_usd,
+                l.cost_pln as lot_cost_pln
             FROM cc_chains ch
-            LEFT JOIN lots l      ON l.id = ch.lot_id
-            LEFT JOIN options_cc cc ON cc.chain_id = ch.id
-            GROUP BY ch.id
-            ORDER BY COALESCE(ch.ticker, l.ticker), l.buy_date DESC, ch.id
-        """
-
-        cur.execute(query)
-        rows = cur.fetchall() or []
-
-        # Konwersja do listy dict
-        out = []
-        for r in rows:
-            # Dla kompatybilności z wcześniejszym formatem kluczy:
-            out.append({
-                'id':               r['id'],
-                'lot_id':           r['lot_id'],
-                'ticker':           r['ticker'],
-                'chain_name':       r['chain_name'],
-                'start_date':       r['start_date'],
-                'end_date':         (r['end_date'] if has_end_date else None),
-                'status':           r['status'],
-                'lot_buy_date':     r['lot_buy_date'],
-                'lot_total':        r['lot_total'],
-                'lot_open':         r['lot_open'],
-                'cc_count':         int(r['cc_count'] or 0),
-                'open_cc_count':    int(r['open_cc_count'] or 0),
-                'total_pl_pln':     float(r['total_pl_pln'] or 0.0),
-                'total_premium_pln':float(r['total_premium_pln'] or 0.0)
+            JOIN lots l ON l.id = ch.lot_id
+            ORDER BY ch.ticker, l.buy_date DESC
+        """)
+        
+        chains_data = cur.fetchall()
+        
+        lot_chains = []
+        
+        for chain_row in chains_data:
+            chain_id = chain_row['chain_id']
+            lot_id = chain_row['lot_id']
+            
+            # CC dla tego chain
+            cur.execute("""
+                SELECT 
+                    id, contracts, strike_usd, premium_sell_usd, premium_sell_pln,
+                    open_date, expiry_date, close_date, status, pl_pln
+                FROM options_cc
+                WHERE chain_id = ?
+                ORDER BY open_date
+            """, (chain_id,))
+            
+            cc_rows = cur.fetchall()
+            cc_list = [dict(cc) for cc in cc_rows]
+            
+            # Stock sales z tego LOT-a - POPRAWIONY QUERY
+            cur.execute("""
+                SELECT DISTINCT
+                    st.id,
+                    st.sell_date, 
+                    st.sell_price_usd,
+                    st.pl_pln,
+                    sts.qty_from_lot
+                FROM stock_trades st
+                JOIN stock_trade_splits sts ON st.id = sts.trade_id
+                WHERE sts.lot_id = ?
+                ORDER BY st.sell_date
+            """, (lot_id,))
+            
+            stock_rows = cur.fetchall()
+            
+            # Konwertuj stock sales na słowniki
+            stock_sales = []
+            total_stock_pl = 0
+            
+            for sale in stock_rows:
+                sale_dict = {
+                    'sell_date': sale['sell_date'],
+                    'sell_price_usd': sale['sell_price_usd'],
+                    'qty_from_lot': sale['qty_from_lot'],
+                    'pl_pln_portion': 0  # Zostaw 0 - trudno policzyć proporcję
+                }
+                stock_sales.append(sale_dict)
+                
+                # P/L proporcjonalny do qty_from_lot / total quantity w trade
+                # Ale to skomplikowane - na razie użyj całego P/L z trade
+                total_stock_pl += sale['pl_pln'] or 0
+            
+            # Deduplicacja - jeden trade może mieć wiele splits
+            if stock_sales:
+                unique_trades = {}
+                for sale in stock_sales:
+                    key = sale['sell_date']
+                    if key not in unique_trades:
+                        unique_trades[key] = sale
+                stock_sales = list(unique_trades.values())
+                
+                # Skoryguj total_stock_pl - podziel przez liczbę duplikatów
+                if len(stock_rows) > len(stock_sales):
+                    total_stock_pl = total_stock_pl / (len(stock_rows) / len(stock_sales))
+            
+            # Kalkulacje finansowe
+            total_cc_premium = sum(cc.get('premium_sell_pln', 0) or 0 for cc in cc_list)
+            total_cc_pl = sum(cc.get('pl_pln', 0) or 0 for cc in cc_list)
+            total_chain_pl = total_cc_pl + total_stock_pl
+            
+            lot_cost = chain_row['lot_cost_pln'] or 0
+            roi_percent = (total_chain_pl / lot_cost * 100) if lot_cost > 0 else 0
+            
+            # Status LOT-a
+            lot_status = 'active' if chain_row['quantity_open'] > 0 else 'sold'
+            
+            # Count metrics
+            cc_count = len(cc_list)
+            open_cc_count = sum(1 for cc in cc_list if cc.get('status') == 'open')
+            
+            lot_chains.append({
+                'chain_id': chain_id,
+                'lot_id': lot_id,
+                'ticker': chain_row['ticker'],
+                'chain_name': chain_row['chain_name'],
+                'lot_status': lot_status,
+                'lot_quantity_total': chain_row['quantity_total'],
+                'lot_quantity_open': chain_row['quantity_open'],
+                'lot_buy_date': chain_row['lot_buy_date'],
+                'lot_buy_price_usd': float(chain_row['buy_price_usd'] or 0),
+                'lot_cost_pln': lot_cost,
+                'chain_start_date': chain_row['chain_start_date'],
+                'chain_end_date': chain_row['chain_end_date'],
+                'cc_count': cc_count,
+                'open_cc_count': open_cc_count,
+                'total_cc_premium_pln': total_cc_premium,
+                'total_chain_pl_pln': total_chain_pl,
+                'total_stock_pl_pln': total_stock_pl,
+                'roi_percent': roi_percent,
+                'cc_list': cc_list,
+                'stock_sales': stock_sales
             })
-        return out
-
-    except Exception:
-        # Bez wycieku stacktrace w UI; zwróć pustą listę (funkcja „summary”).
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
+        
+        return lot_chains
+        
+    except Exception as e:
+        print(f"Błąd get_lot_chains_summary: {e}")
+        import traceback
+        traceback.print_exc()
         return []
     finally:
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
+        conn.close()
 
 
 def update_chain_statistics(chain_id):
@@ -7837,6 +7946,11 @@ def update_chain_statistics(chain_id):
         except Exception:
             pass
         return {'success': False, 'message': f'Błąd aktualizacji: {str(e)}'}
+
+
+
+
+
 
 
 # Test na końcu pliku (opcjonalny)
